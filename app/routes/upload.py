@@ -87,7 +87,6 @@ def _validate_and_save_file(file_storage):
         if not (header.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1') or header.startswith(b'\xd0\xcf\x11\xe0')):
             return False, 'File content does not match Word (.doc) format.', None, None
         extracted_text = "[Word document attached]"
-
     elif ext in ('jpg', 'jpeg', 'png', 'webp'):
     header = file_storage.read(32)
     file_storage.seek(0)
