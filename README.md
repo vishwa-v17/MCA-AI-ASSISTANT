@@ -1,5 +1,5 @@
 
-# SmartGPT Web
+# MCA AI ASSISTANT
 
 AI Assistant Website using Flask and OpenRouter API.
 
