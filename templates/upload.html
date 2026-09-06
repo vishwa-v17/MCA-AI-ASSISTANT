@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure File Upload - MCA Student AI Assistant</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Main Style -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="dark-theme">
+
+<div class="app-layout">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">
+                <i class="fa-solid fa-graduation-cap brand-icon"></i>
+                <span class="brand-name">MCA AI</span>
+            </div>
+        </div>
+
+        <div class="sidebar-footer" style="margin-top: auto;">
+            <a href="{{ url_for('dashboard.index') }}" class="nav-btn active" style="text-decoration: none; display: flex; align-items: center; gap: 8px;">
+                <i class="fa-solid fa-arrow-left"></i> Back to Dashboard
+            </a>
+            <a href="{{ url_for('auth.logout') }}" class="nav-btn" style="text-decoration: none; display: flex; align-items: center; gap: 8px;">
+                <i class="fa-solid fa-arrow-right-from-bracket"></i> Logout
+            </a>
+            <div class="info-tag">MCA Scope-Locked</div>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-container" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 20px;">
+        <div style="background-color: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 16px; padding: 32px; width: 100%; max-width: 560px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+            <div style="text-align: center; margin-bottom: 24px;">
+                <div style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 12px; background: var(--accent-gradient); color: white; margin-bottom: 12px; font-size: 20px;">
+                    <i class="fa-solid fa-cloud-arrow-up"></i>
+                </div>
+                <h2 style="font-size: 22px; font-weight: 700; margin-bottom: 8px;">Secure File Upload</h2>
+                <p style="font-size: 13px; color: var(--text-secondary);">Upload course materials, notes, assignments, or documents</p>
+            </div>
+
+            <!-- Flashed Messages -->
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% if messages %}
+                {% for category, message in messages %}
+                  <div class="auth-{{ category if category in ['success', 'error'] else 'error' }}" style="margin-bottom: 20px;">
+                    <i class="fa-solid fa-{{ 'circle-check' if category == 'success' else 'circle-exclamation' }}"></i> {{ message }}
+                  </div>
+                {% endfor %}
+              {% endif %}
+            {% endwith %}
+
+            <!-- Client-side Error Box -->
+            <div id="client-error" class="auth-error" style="display: none; margin-bottom: 20px;">
+                <i class="fa-solid fa-circle-exclamation"></i> <span id="client-error-text"></span>
+            </div>
+
+            <form id="upload-form" action="{{ url_for('upload.upload_file') }}" method="POST" enctype="multipart/form-data">
+                <div style="border: 2px dashed var(--border-color); border-radius: 12px; padding: 24px; text-align: center; background-color: var(--bg-dark); margin-bottom: 20px;">
+                    <i class="fa-solid fa-file-arrow-up" style="font-size: 32px; color: var(--accent-primary); margin-bottom: 12px; display: block;"></i>
+                    <label for="file-input" style="cursor: pointer; display: block; font-weight: 600; font-size: 14px; margin-bottom: 6px; color: var(--text-primary);">
+                        Select a file to upload
+                    </label>
+                    <input type="file" id="file-input" name="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp" required style="font-size: 13px; color: var(--text-secondary); margin-top: 8px;">
+                    <p style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
+                        Supported: <strong>PDF, DOC, DOCX, JPG, PNG, WEBP</strong><br>
+                        Maximum file size: <strong>10 MB</strong>
+                    </p>
+                </div>
+
+                <button type="submit" id="upload-btn" class="auth-submit-btn" style="display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;">
+                    <i class="fa-solid fa-arrow-up-from-bracket"></i> Upload File
+                </button>
+            </form>
+        </div>
+    </main>
+</div>
+
+<script>
+    const form = document.getElementById('upload-form');
+    const fileInput = document.getElementById('file-input');
+    const errorBox = document.getElementById('client-error');
+    const errorText = document.getElementById('client-error-text');
+
+    const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
+    const ALLOWED_EXTS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'webp'];
+
+    form.addEventListener('submit', function(e) {
+        errorBox.style.display = 'none';
+
+        if (!fileInput.files || fileInput.files.length === 0) {
+            e.preventDefault();
+            errorText.textContent = 'Please select a file to upload.';
+            errorBox.style.display = 'flex';
+            return;
+        }
+
+        const file = fileInput.files[0];
+
+        // Validate File Size (Frontend)
+        if (file.size > MAX_SIZE) {
+            e.preventDefault();
+            errorText.textContent = 'File too large. Maximum allowed size is 10 MB.';
+            errorBox.style.display = 'flex';
+            return;
+        }
+
+        // Validate File Extension (Frontend)
+        const parts = file.name.split('.');
+        const ext = parts.length > 1 ? parts.pop().toLowerCase() : '';
+        if (!ALLOWED_EXTS.includes(ext)) {
+            e.preventDefault();
+            errorText.textContent = 'Unsupported file type. Allowed: PDF, DOC, DOCX, JPG, PNG, WEBP.';
+            errorBox.style.display = 'flex';
+            return;
+        }
+    });
+</script>
+
+</body>
+</html>

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ subject.name }} - MCA Assistant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="app-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">
+                <i class="fa-solid fa-graduation-cap brand-icon"></i>
+                <span class="brand-name">MCA AI</span>
+            </div>
+        </div>
+        <div class="sessions-list-container" style="padding: 12px;">
+            <a href="{{ url_for('dashboard.index') }}" class="nav-btn" style="text-decoration: none; margin-bottom: 16px;">
+                <i class="fa-solid fa-arrow-left"></i> Back to Dashboard
+            </a>
+            
+            <h3 class="section-title" style="margin-top: 16px;">Generators</h3>
+            
+            <button class="nav-btn generator-btn" id="btn-overview" onclick="generateContent('overview')">
+                <i class="fa-solid fa-eye"></i> Overview
+            </button>
+            <button class="nav-btn generator-btn" id="btn-summary" onclick="generateContent('summary')">
+                <i class="fa-solid fa-book"></i> Smart Notes
+            </button>
+            <button class="nav-btn generator-btn" id="btn-paper_5m" onclick="generateContent('paper_5m')">
+                <i class="fa-solid fa-file-lines"></i> 5 Marks Questions
+            </button>
+            <button class="nav-btn generator-btn" id="btn-paper_10m" onclick="generateContent('paper_10m')">
+                <i class="fa-solid fa-file-signature"></i> 10 Marks Questions
+            </button>
+            <button class="nav-btn generator-btn" id="btn-viva" onclick="generateContent('viva')">
+                <i class="fa-solid fa-clipboard-question"></i> Viva Questions
+            </button>
+        </div>
+        
+        <div class="sidebar-footer">
+            <div class="info-tag">{{ subject.code }}</div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-container">
+        <header class="app-header">
+            <div class="header-left">
+                <button class="sidebar-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+                <h2>{{ subject.code }} — {{ subject.name }}</h2>
+            </div>
+            <div class="header-right">
+                <button class="nav-btn" onclick="askAIAboutSubject()" style="padding: 6px 14px; font-size: 13px;">
+                    <i class="fa-solid fa-robot"></i> Ask AI About This Subject
+                </button>
+            </div>
+        </header>
+
+        <div class="content-view active" style="overflow-y: auto;">
+            <!-- Hero Info -->
+            <div class="dashboard-section" style="padding-top: 24px;">
+                <div class="hero-section" style="text-align: left; padding: 32px;">
+                    <h1>{{ subject.name }}</h1>
+                    <p style="color: var(--text-secondary); margin-top: 8px;">Semester {{ subject.semester }} • {{ subject.code }}</p>
+                    <p style="margin-top: 16px; color: var(--text-secondary);">{{ subject.description }}</p>
+                </div>
+            </div>
+
+            <!-- Syllabus Outline -->
+            <div class="dashboard-section">
+                <h3 class="section-heading">Syllabus Outline</h3>
+                <div class="subjects-grid" style="margin-top: 16px;">
+                    {% for unit in subject.syllabus %}
+                    <div class="subject-card" style="cursor: default;">
+                        <div>
+                            <span class="subj-code" style="font-size: 11px;">{{ unit.unit }}</span>
+                            <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;">
+                                {% for topic in unit.topics %}
+                                <span style="background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.2); padding: 3px 10px; border-radius: 12px; font-size: 11px; color: var(--text-secondary);">{{ topic }}</span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Generated Content Viewer -->
+            <div id="generated-content-section" class="dashboard-section" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 class="section-heading" id="generated-title">Generated Content</h3>
+                    <div style="display: flex; gap: 8px;">
+                        <button onclick="downloadContent()" class="nav-btn" style="padding: 6px 12px; font-size: 12px;">
+                            <i class="fa-solid fa-download"></i> Download TXT
+                        </button>
+                        <button onclick="copyContent()" class="nav-btn" style="padding: 6px 12px; font-size: 12px;">
+                            <i class="fa-solid fa-copy"></i> Copy
+                        </button>
+                    </div>
+                </div>
+                <div id="generated-body" class="msg" style="background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-top: 16px; max-width: 100%; white-space: normal; word-wrap: break-word;"></div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script>
+    const subjectCode = "{{ subject.code }}";
+    const subjectName = "{{ subject.name }}";
+    let currentGeneratedText = "";
+
+    if (window.marked) {
+        marked.setOptions({ gfm: true, breaks: true, headerIds: false, mangle: false });
+    }
+
+    function askAIAboutSubject() {
+        window.location.href = `/?ask_subject=${encodeURIComponent(subjectCode)}&subject_name=${encodeURIComponent(subjectName)}`;
+    }
+
+    async function generateContent(type) {
+        const section = document.getElementById('generated-content-section');
+        const body = document.getElementById('generated-body');
+        const title = document.getElementById('generated-title');
+        
+        // Highlight active button
+        document.querySelectorAll('.generator-btn').forEach(b => b.classList.remove('active'));
+        const activeBtn = document.getElementById('btn-' + type);
+        if (activeBtn) activeBtn.classList.add('active');
+        
+        // Show section with loading
+        section.style.display = 'block';
+        body.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 12px; padding: 20px;">
+                <i class="fa-solid fa-spinner fa-spin" style="font-size: 20px; color: var(--accent-primary);"></i>
+                <div>
+                    <p style="font-weight: 600;">Generating content...</p>
+                    <p style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">This may take 30-60 seconds depending on the AI model speed.</p>
+                </div>
+            </div>
+        `;
+        
+        let titleText = "Smart Notes";
+        if (type === 'overview') titleText = "📋 Subject Overview";
+        if (type === 'paper_5m') titleText = "📝 5 Marks Questions";
+        if (type === 'paper_10m') titleText = "📄 10 Marks Questions";
+        if (type === 'viva') titleText = "🎤 Viva Questions";
+        if (type === 'summary') titleText = "📚 Smart Notes";
+        title.innerText = titleText;
+        
+        // Scroll to the generated content section
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        try {
+            const res = await fetch('/api/generate_notes', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ subject_code: subjectCode, note_type: type })
+            });
+            
+            const data = await res.json();
+            
+            if (data.error) {
+                body.innerHTML = `
+                    <div style="padding: 20px; text-align: center;">
+                        <i class="fa-solid fa-triangle-exclamation" style="font-size: 32px; color: #ef4444; margin-bottom: 12px;"></i>
+                        <p style="color: #ef4444; font-weight: 600; margin-bottom: 8px;">Generation Failed</p>
+                        <p style="color: var(--text-secondary); font-size: 13px;">${data.error}</p>
+                        <button onclick="generateContent('${type}')" class="nav-btn" style="margin-top: 16px; padding: 8px 16px;">
+                            <i class="fa-solid fa-rotate"></i> Retry
+                        </button>
+                    </div>
+                `;
+            } else {
+                currentGeneratedText = data.content;
+                body.innerHTML = marked.parse(data.content);
+                if (window.Prism) {
+                    Prism.highlightAllUnder(body);
+                }
+            }
+        } catch (err) {
+            body.innerHTML = `
+                <div style="padding: 20px; text-align: center;">
+                    <i class="fa-solid fa-plug-circle-xmark" style="font-size: 32px; color: #ef4444; margin-bottom: 12px;"></i>
+                    <p style="color: #ef4444; font-weight: 600;">Connection Error</p>
+                    <p style="color: var(--text-secondary); font-size: 13px; margin-top: 8px;">Could not connect to the server. Please make sure the server is running.</p>
+                </div>
+            `;
+            console.error("Generate error:", err);
+        }
+    }
+    
+    function copyContent() {
+        if (!currentGeneratedText) {
+            alert("No content to copy yet. Generate something first.");
+            return;
+        }
+        navigator.clipboard.writeText(currentGeneratedText).then(() => {
+            alert("Copied to clipboard!");
+        });
+    }
+    
+    function downloadContent() {
+        if (!currentGeneratedText) {
+            alert("No content to download yet. Generate something first.");
+            return;
+        }
+        const blob = new Blob([currentGeneratedText], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${subjectCode}_${document.getElementById('generated-title').innerText.replace(/[^\w]/g, '_')}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+</script>
+</body>
+</html>

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCA Student AI Assistant</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Prism.js Tomorrow Night Theme for Code Highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <!-- Main Style -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="dark-theme">
+
+<div class="app-layout">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">
+                <i class="fa-solid fa-graduation-cap brand-icon"></i>
+                <span class="brand-name">MCA AI</span>
+            </div>
+            <button class="new-chat-btn" onclick="startNewSession()">
+                <i class="fa-solid fa-plus"></i> New Chat
+            </button>
+        </div>
+        
+        <div class="sessions-list-container">
+            <h3 class="section-title">Recent Chats</h3>
+            <div id="sessions-list" class="sessions-list">
+                <!-- Sessions will be loaded here -->
+            </div>
+        </div>
+
+        <div class="sidebar-footer">
+            <button class="nav-btn active" onclick="showDashboard()">
+                <i class="fa-solid fa-house"></i> Dashboard
+            </button>
+            <button class="nav-btn" onclick="openConfigModal()">
+                <i class="fa-solid fa-gear"></i> Settings
+            </button>
+            <a href="{{ url_for('auth.logout') }}" class="nav-btn" style="text-decoration: none; display: flex; align-items: center;">
+                <i class="fa-solid fa-arrow-right-from-bracket"></i> Logout
+            </a>
+            <div class="info-tag">MCA Scope-Locked</div>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-container">
+        <!-- HEADER -->
+        <header class="app-header">
+            <div class="header-left">
+                <button class="sidebar-toggle" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i></button>
+                <h2 id="current-chat-title">Welcome back, {{ username }}!</h2>
+            </div>
+            <div class="header-right">
+                <span class="status-indicator"><span class="dot"></span> AI Online</span>
+            </div>
+        </header>
+
+        <!-- DASHBOARD VIEW -->
+        <div id="dashboard-view" class="content-view active" style="overflow-y: auto;">
+            <div class="dashboard-section" style="padding-top: 24px;">
+                <div class="hero-section glass-panel" style="text-align: left; padding: 40px; margin-bottom: 30px;">
+                    <h1>Your Advanced <span class="gradient-text">MCA Assistant</span></h1>
+                    <p class="subtitle" style="margin-top: 10px;">Select a subject below to generate study notes, question papers, and get AI-powered tutoring.</p>
+                </div>
+            </div>
+
+            <!-- QUICK SUGGESTIONS GRID -->
+            <div class="dashboard-section">
+                <h3 class="section-heading" style="margin-bottom: 20px;">Quick Prompts</h3>
+                <div class="prompts-grid">
+                    <div class="prompt-card" onclick="useQuickPrompt('Explain DBMS Normalization with examples of 1NF, 2NF, and 3NF')">
+                        <i class="fa-solid fa-database card-icon text-blue"></i>
+                        <h4>DBMS Normalization</h4>
+                        <p>Learn rules & concepts of database schemas.</p>
+                    </div>
+                    <div class="prompt-card" onclick="useQuickPrompt('Write a C program to implement a Binary Search Tree (BST) insertion and traversal')">
+                        <i class="fa-solid fa-code card-icon text-green"></i>
+                        <h4>DSA C Code</h4>
+                        <p>Generate & understand data structures.</p>
+                    </div>
+                    <div class="prompt-card" onclick="useQuickPrompt('Explain the difference between a process and a thread in OS with a comparison table')">
+                        <i class="fa-solid fa-gears card-icon text-purple"></i>
+                        <h4>OS Process vs Thread</h4>
+                        <p>Compare process management behaviors.</p>
+                    </div>
+                    <div class="prompt-card" onclick="useQuickPrompt('Explain Dijkstra\'s shortest path algorithm step-by-step with a simple walkthrough')">
+                        <i class="fa-solid fa-network-wired card-icon text-yellow"></i>
+                        <h4>Network / DSA Algorithms</h4>
+                        <p>Master pathfinding & graph algorithms.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SYLLABUS HUB -->
+            <div class="dashboard-section">
+                <h3 class="section-heading" style="margin-bottom: 20px;">Explore Syllabus & Notes</h3>
+                <div class="semester-tabs">
+                    <button class="sem-tab active" onclick="switchSemester(1)">Semester 1</button>
+                    <button class="sem-tab" onclick="switchSemester(2)">Semester 2</button>
+                    <button class="sem-tab" onclick="switchSemester(3)">Semester 3</button>
+                    <button class="sem-tab" onclick="switchSemester(4)">Semester 4</button>
+                </div>
+                <div id="subjects-container" class="subjects-grid">
+                    <!-- Subjects dynamically injected here by script.js -->
+                </div>
+            </div>
+        </div>
+
+        <!-- CHAT VIEW -->
+        <div id="chat-view" class="content-view">
+            <div class="chat-header-actions" style="padding: 10px 20px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 10px;">
+                <button class="nav-btn" onclick="renameCurrentSession()" style="padding: 6px 12px; font-size: 12px;"><i class="fa-solid fa-pen"></i> Rename</button>
+                <button class="nav-btn" onclick="pinCurrentSession()" style="padding: 6px 12px; font-size: 12px;"><i class="fa-solid fa-thumbtack"></i> Pin</button>
+            </div>
+            
+            <div id="chat-messages" class="chat-messages">
+                <!-- Chat messages will be loaded here -->
+            </div>
+            
+            <!-- INPUT AREA -->
+            <div class="input-section">
+                <!-- Attachment Preview Chip -->
+                <div id="attachment-preview-container" class="attachment-preview-container" style="display: none;">
+                    <div id="attachment-chip" class="attachment-chip">
+                        <span id="attachment-icon" class="attachment-icon"></span>
+                        <img id="attachment-thumb" class="attachment-thumb" style="display: none;" alt="Preview" />
+                        <span id="attachment-name" class="attachment-name"></span>
+                        <span id="attachment-size" class="attachment-size"></span>
+                        <button type="button" class="attachment-remove-btn" onclick="removeAttachment()" title="Remove attachment">&times;</button>
+                    </div>
+                </div>
+
+                <div class="input-wrapper">
+                    <button type="button" id="attach-btn" class="attach-btn" onclick="triggerFileUpload()" title="Attach File (PDF, Word, Images)">
+                        <i class="fa-solid fa-plus"></i>
+                    </button>
+                    <input type="file" id="chat-file-input" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp" style="display: none;" onchange="handleChatFileSelected(event)">
+                    <textarea id="msg" placeholder="Ask anything about MCA subjects (e.g. SQL, Java, Operating Systems, Math)..." rows="1"></textarea>
+                    <button id="send-btn" onclick="sendMsg()">
+                        <i class="fa-solid fa-paper-plane"></i>
+                    </button>
+                </div>
+                <p class="input-disclaimer">AI can make mistakes. Verify important academic information.</p>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- Modal for Configuration Settings -->
+<div id="config-modal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+        <span class="close-modal" onclick="closeConfigModal()">&times;</span>
+        <div class="modal-header">
+            <i class="fa-solid fa-gear modal-icon text-purple" style="font-size: 20px;"></i>
+            <h3 style="margin-top: 6px;">Settings</h3>
+        </div>
+        <p class="modal-desc" style="margin-bottom: 20px;">Edit the settings below. Saving will validate your credentials.</p>
+        
+        <div class="form-group" style="margin-bottom: 18px;">
+            <label for="config-api-key" style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary);">OpenRouter API Key</label>
+            <div style="position: relative; display: flex; align-items: center;">
+                <input id="config-api-key" type="password" placeholder="sk-or-v1-..." style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); background-color: var(--bg-dark); color: white; outline: none; padding-right: 40px; font-size: 14px;" />
+                <button type="button" onclick="toggleApiKeyVisibility()" style="position: absolute; right: 10px; background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px;"><i class="fa-regular fa-eye" id="eye-icon"></i></button>
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 24px;">
+            <label for="config-model" style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary);">Model Name</label>
+            <input id="config-model" type="text" placeholder="e.g., mistralai/mistral-7b-instruct:free" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); background-color: var(--bg-dark); color: white; outline: none; font-size: 14px;" />
+        </div>
+
+        <div id="config-status-msg" style="display: none; font-size: 12.5px; font-weight: 500; margin-bottom: 20px; padding: 12px; border-radius: 8px;"></div>
+
+        <button class="modal-action-btn" id="save-config-btn" onclick="saveConfig()">
+            <i class="fa-solid fa-floppy-disk"></i> Save Configuration
+        </button>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
