@@ -1,7 +1,6 @@
 from flask import Blueprint, request, jsonify, flash, redirect, url_for, current_app, session, render_template
 import os
 import uuid
-import imghdr
 import io
 import zipfile
 import xml.etree.ElementTree as ET
@@ -90,20 +89,30 @@ def _validate_and_save_file(file_storage):
         extracted_text = "[Word document attached]"
 
     elif ext in ('jpg', 'jpeg', 'png', 'webp'):
-        header = file_storage.read(32)
-        file_storage.seek(0)
-        img_type = imghdr.what(None, h=header)
-        if ext in ('jpg', 'jpeg'):
-            if not header.startswith(b'\xff\xd8\xff') or img_type != 'jpeg':
-                return False, 'Invalid or corrupted JPEG image.', None, None
-        elif ext == 'png':
-            if not header.startswith(b'\x89PNG\r\n\x1a\n') or img_type != 'png':
-                return False, 'Invalid or corrupted PNG image.', None, None
-        elif ext == 'webp':
-            is_webp = (header.startswith(b'RIFF') and len(header) >= 12 and header[8:12] == b'WEBP')
-            if not is_webp or img_type != 'webp':
-                return False, 'Invalid or corrupted WEBP image.', None, None
-        extracted_text = f"[{ext.upper()} image attached]"
+    header = file_storage.read(32)
+    file_storage.seek(0)
+
+    if ext in ('jpg', 'jpeg'):
+        # JPEG magic bytes: FF D8 FF
+        if not header.startswith(b'\xff\xd8\xff'):
+            return False, 'Invalid or corrupted JPEG image.', None, None
+
+    elif ext == 'png':
+        # PNG magic bytes
+        if not header.startswith(b'\x89PNG\r\n\x1a\n'):
+            return False, 'Invalid or corrupted PNG image.', None, None
+
+    elif ext == 'webp':
+        # WEBP: RIFF....WEBP
+        is_webp = (
+            header.startswith(b'RIFF')
+            and len(header) >= 12
+            and header[8:12] == b'WEBP'
+        )
+        if not is_webp:
+            return False, 'Invalid or corrupted WEBP image.', None, None
+
+    extracted_text = f"[{ext.upper()} image attached]"
 
     else:
         return False, 'Unsupported file type.', None, None
