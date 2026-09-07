@@ -87,6 +87,3 @@ def set_config():
   "api_key": "",
   "model": "nvidia/nemotron-3-ultra-550b-a55b:free"
 }
-git add .
-git commit -m "Add per-user API key storage"
-git push
