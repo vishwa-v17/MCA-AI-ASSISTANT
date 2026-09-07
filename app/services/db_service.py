@@ -80,6 +80,17 @@ def init_db():
     )
     """)
 
+    # 7. User API Configuration
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_api_config (
+        user_id TEXT PRIMARY KEY,
+        api_key TEXT NOT NULL,
+        model TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    """)
+
     # Attempt to alter existing tables for backward compatibility (if upgrading)
     try:
         cursor.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE")
