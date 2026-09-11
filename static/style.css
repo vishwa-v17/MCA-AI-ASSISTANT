@@ -1351,3 +1351,144 @@ MOBILE RESPONSIVE
 ```
 
 }
+
+/* =========================================
+   DARK / LIGHT MODE
+   ========================================= */
+
+/* Dark Theme */
+body.dark-theme {
+    --bg-dark: #0f1117;
+    --bg-card: #171a21;
+    --bg-secondary: #1d212b;
+    --text-primary: #ffffff;
+    --text-secondary: #b8bec9;
+    --text-muted: #7f8794;
+    --border-color: #2a2f3a;
+}
+
+/* Light Theme */
+body.light-theme {
+    --bg-dark: #f5f7fa;
+    --bg-card: #ffffff;
+    --bg-secondary: #eef1f5;
+    --text-primary: #1a1d24;
+    --text-secondary: #4f5663;
+    --text-muted: #737b88;
+    --border-color: #d9dee7;
+}
+
+/* Smooth theme transition */
+body,
+.sidebar,
+.main-container,
+.app-header,
+.glass-panel,
+.prompt-card,
+.subject-card,
+.modal-content,
+.input-wrapper,
+.sessions-list,
+.nav-btn,
+.sem-tab,
+textarea,
+input,
+select {
+    transition:
+        background-color 0.25s ease,
+        color 0.25s ease,
+        border-color 0.25s ease;
+}
+
+/* Theme Toggle Button */
+.theme-toggle-btn {
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.25s ease;
+    margin-left: 12px;
+}
+
+.theme-toggle-btn:hover {
+    transform: rotate(15deg) scale(1.05);
+    border-color: var(--text-secondary);
+}
+
+/* Light theme specific adjustments */
+body.light-theme .sidebar {
+    background: #ffffff;
+    border-right-color: var(--border-color);
+}
+
+body.light-theme .app-header {
+    background: #ffffff;
+    border-bottom-color: var(--border-color);
+}
+
+body.light-theme .glass-panel {
+    background: rgba(255, 255, 255, 0.85);
+    border-color: var(--border-color);
+}
+
+body.light-theme .prompt-card {
+    background: #ffffff;
+    border-color: var(--border-color);
+}
+
+body.light-theme .prompt-card:hover {
+    background: #f8fafc;
+}
+
+body.light-theme .subject-card {
+    background: #ffffff;
+    border-color: var(--border-color);
+}
+
+body.light-theme .input-wrapper {
+    background: #ffffff;
+    border-color: var(--border-color);
+}
+
+body.light-theme textarea,
+body.light-theme input,
+body.light-theme select {
+    background-color: #ffffff !important;
+    color: #1a1d24 !important;
+}
+
+body.light-theme textarea::placeholder,
+body.light-theme input::placeholder {
+    color: #8a919d;
+}
+
+body.light-theme .nav-btn {
+    color: #4f5663;
+}
+
+body.light-theme .nav-btn:hover {
+    background: #eef1f5;
+    color: #1a1d24;
+}
+
+body.light-theme .section-title,
+body.light-theme .section-heading,
+body.light-theme h1,
+body.light-theme h2,
+body.light-theme h3,
+body.light-theme h4 {
+    color: var(--text-primary);
+}
+
+body.light-theme .modal-content {
+    background: #ffffff;
+    color: #1a1d24;
+    border-color: var(--border-color);
+}
