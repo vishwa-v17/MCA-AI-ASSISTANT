@@ -588,21 +588,45 @@ function renderSubjects() {
 }
 
 // Config Modal handling
+let availableModels = [];
+let selectedModelId = "";
+
 async function openConfigModal() {
     const statusMsg = document.getElementById("config-status-msg");
     statusMsg.style.display = "none";
     statusMsg.className = "";
     statusMsg.innerText = "";
-    
+
+    document.getElementById("config-api-key").value = "";
+    document.getElementById("config-model-search").value = "";
+
     try {
         const res = await fetch("/api/config");
         const data = await res.json();
-        document.getElementById("config-api-key").value = data.api_key || "";
-        document.getElementById("config-model").value = data.model || "";
+        if (!res.ok) throw new Error(data.error || "Could not load settings.");
+
+        selectedModelId = data.model || data.default_model || "openrouter/free";
+
+        const access = document.getElementById("config-access-status");
+        access.innerText = data.api_key_status || "Using default server key";
+        access.style.color = data.has_personal_key ? "var(--accent-primary)" : "var(--text-muted)";
+
+        const personalStatus = document.getElementById("personal-key-status");
+        if (data.has_personal_key) {
+            personalStatus.innerText = `Personal key: ••••••••••••${data.personal_key_last4 || ""} (stored securely)`;
+        } else {
+            personalStatus.innerText = data.server_default_available
+                ? "Personal key not configured. Using the default server key."
+                : "No personal key is configured.";
+        }
+
+        document.getElementById("remove-key-btn").disabled = !data.has_personal_key;
+
+        await loadModelCatalog();
     } catch (err) {
-        console.error(err);
+        showConfigStatus(err.message || "Could not load settings.", "status-error");
     }
-    
+
     document.getElementById("config-modal").classList.add("active");
     document.querySelector(".sidebar").classList.remove("open");
 }
@@ -623,41 +647,194 @@ function toggleApiKeyVisibility() {
     }
 }
 
+function showConfigStatus(message, className) {
+    const statusMsg = document.getElementById("config-status-msg");
+    statusMsg.style.display = "block";
+    statusMsg.className = className || "";
+    statusMsg.innerText = message;
+}
+
+function buildModelOptions(freeModels, allModels) {
+    const select = document.getElementById("config-model");
+    if (!select) return;
+
+    select.innerHTML = "";
+
+    const addGroup = (label, models) => {
+        if (!models || !models.length) return;
+        const group = document.createElement("optgroup");
+        group.label = label;
+        models.forEach(model => {
+            const option = document.createElement("option");
+            option.value = model.id;
+            option.textContent = `${model.name || model.id}${model.free ? " • FREE" : ""}`;
+            option.title = model.description || model.id;
+            group.appendChild(option);
+        });
+        select.appendChild(group);
+    };
+
+    const freeRouter = {
+        id: "openrouter/free",
+        name: "OpenRouter Free Router",
+        free: true
+    };
+    addGroup("Recommended Free Models", [freeRouter, ...(freeModels || [])]);
+
+    const freeIds = new Set((freeModels || []).map(m => m.id));
+    addGroup("All Available Models", (allModels || []).filter(m => !freeIds.has(m.id)));
+
+    const found = [...select.options].some(option => option.value === selectedModelId);
+    if (!found && selectedModelId) {
+        const fallback = document.createElement("option");
+        fallback.value = selectedModelId;
+        fallback.textContent = selectedModelId;
+        fallback.selected = true;
+        select.appendChild(fallback);
+    }
+
+    select.value = selectedModelId || "openrouter/free";
+}
+
+async function loadModelCatalog() {
+    const select = document.getElementById("config-model");
+    if (select) {
+        select.innerHTML = '<option>Loading current OpenRouter models...</option>';
+    }
+
+    try {
+        const res = await fetch("/api/config/models");
+        const data = await res.json();
+        if (!res.ok && !data.free_models) {
+            throw new Error(data.error || "Could not load models.");
+        }
+        availableModels = [...(data.free_models || []), ...(data.all_models || [])];
+        buildModelOptions(data.free_models || [], data.all_models || []);
+    } catch (err) {
+        if (select) {
+            select.innerHTML = "";
+            const option = document.createElement("option");
+            option.value = "openrouter/free";
+            option.textContent = "OpenRouter Free Router";
+            select.appendChild(option);
+            select.value = selectedModelId || "openrouter/free";
+        }
+        showConfigStatus(err.message || "Could not load the current model list.", "status-error");
+    }
+}
+
+function filterModelOptions() {
+    const query = (document.getElementById("config-model-search").value || "").trim().toLowerCase();
+    const select = document.getElementById("config-model");
+    if (!select) return;
+
+    Array.from(select.options).forEach(option => {
+        const matches = !query || option.textContent.toLowerCase().includes(query) || option.value.toLowerCase().includes(query);
+        option.hidden = !matches;
+    });
+}
+
+async function validatePersonalKey() {
+    const apiKey = document.getElementById("config-api-key").value.trim();
+    if (!apiKey) {
+        showConfigStatus("Enter your personal OpenRouter API key first.", "status-error");
+        return;
+    }
+
+    const btn = document.getElementById("validate-key-btn");
+    btn.disabled = true;
+    showConfigStatus("Validating your key with OpenRouter...", "status-loading");
+
+    try {
+        const res = await fetch("/api/config/validate-key", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({api_key: apiKey})
+        });
+        const data = await res.json();
+
+        if (res.ok && data.status === "success") {
+            showConfigStatus(data.message, "status-success");
+            await loadModelCatalog();
+        } else {
+            showConfigStatus(data.message || "Invalid OpenRouter API key.", "status-error");
+        }
+    } catch (err) {
+        showConfigStatus("Could not validate the key.", "status-error");
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function removePersonalKey() {
+    if (!confirm("Remove your personal OpenRouter API key and return to the server default?")) return;
+
+    const btn = document.getElementById("remove-key-btn");
+    btn.disabled = true;
+
+    try {
+        const res = await fetch("/api/config/key", {method: "DELETE"});
+        const data = await res.json();
+
+        if (!res.ok) {
+            showConfigStatus(data.error || data.message || "Could not remove the personal key.", "status-error");
+            return;
+        }
+
+        document.getElementById("config-api-key").value = "";
+        document.getElementById("personal-key-status").innerText = "Personal key removed. Using the default server key.";
+        document.getElementById("config-access-status").innerText = "Using default server key";
+        selectedModelId = document.getElementById("config-model").value || selectedModelId;
+        showConfigStatus(data.message, "status-success");
+        await loadModelCatalog();
+    } catch (err) {
+        showConfigStatus("Could not remove the personal key.", "status-error");
+    } finally {
+        btn.disabled = false;
+    }
+}
+
 async function saveConfig() {
     const apiKey = document.getElementById("config-api-key").value.trim();
     const model = document.getElementById("config-model").value.trim();
-    const statusMsg = document.getElementById("config-status-msg");
     const saveBtn = document.getElementById("save-config-btn");
-    
-    statusMsg.style.display = "block";
-    statusMsg.className = "status-loading";
-    statusMsg.innerText = "Validating...";
+
+    if (!model) {
+        showConfigStatus("Please select a model.", "status-error");
+        return;
+    }
+
     saveBtn.disabled = true;
-    
+    showConfigStatus("Saving settings...", "status-loading");
+
     try {
+        const payload = {model: model};
+        // An empty field means "keep the existing personal key"; a newly
+        // entered value replaces it. Removing is handled by the Remove button.
+        if (apiKey) payload.api_key = apiKey;
+
         const res = await fetch("/api/config", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_key: apiKey, model: model })
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload)
         });
-        
+
         const data = await res.json();
-        
-        if (res.status === 200 && data.status === "success") {
-            statusMsg.className = "status-success";
-            statusMsg.innerText = "Settings updated successfully!";
+
+        if (res.ok && data.status === "success") {
+            selectedModelId = model;
+            showConfigStatus(data.message, "status-success");
+            document.getElementById("config-api-key").value = "";
             setTimeout(() => {
                 closeConfigModal();
                 saveBtn.disabled = false;
-            }, 1000);
+            }, 900);
         } else {
-            statusMsg.className = "status-error";
-            statusMsg.innerText = data.message || "Failed to update settings.";
+            showConfigStatus(data.message || "Failed to update settings.", "status-error");
             saveBtn.disabled = false;
         }
     } catch (err) {
-        statusMsg.className = "status-error";
-        statusMsg.innerText = "Error communicating with server.";
+        showConfigStatus("Error communicating with server.", "status-error");
         saveBtn.disabled = false;
     }
 }
@@ -668,3 +845,4 @@ function escapeHTML(str) {
         '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
     }[tag] || tag));
 }
+
