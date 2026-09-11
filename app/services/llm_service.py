@@ -1,12 +1,19 @@
 import requests
 import json
-from app.config import Config
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Connection pooling for fast requests
 session = requests.Session()
+
+def _safe_error(message, api_key=""):
+    text = str(message or "OpenRouter request failed.")
+    if api_key:
+        text = text.replace(api_key, "[redacted]")
+    text = text.replace("Authorization: Bearer ", "Authorization: Bearer [redacted]")
+    return text[:500]
+
 
 def generate_streaming_response(messages, model, api_key):
     """Generates a fast streaming response using OpenRouter API."""
@@ -40,7 +47,7 @@ def generate_streaming_response(messages, model, api_key):
                 error_message = err_data.get('error', {}).get('message', f'Status {response.status_code}')
             except Exception:
                 error_message = response.text
-            yield f"data: {{\"error\": \"API Error: {error_message}\"}}\n\n"
+            yield f"data: {json.dumps({'error': 'API Error: ' + _safe_error(error_message, api_key)})}\n\n"
             return
 
         for line in response.iter_lines(chunk_size=1):
@@ -58,7 +65,7 @@ def generate_streaming_response(messages, model, api_key):
                     except json.JSONDecodeError:
                         pass
     except Exception as e:
-        yield f"data: {{\"error\": \"Connection Error: {str(e)}\"}}\n\n"
+        yield f"data: {json.dumps({'error': 'Connection Error: ' + _safe_error(e, api_key)})}\n\n"
 
 
 def generate_text_sync(prompt, model, api_key):
@@ -95,6 +102,6 @@ def generate_text_sync(prompt, model, api_key):
                 err = response.json().get('error', {}).get('message', f'HTTP {response.status_code}')
             except:
                 err = response.text
-            return None, f"API Error: {err}"
+            return None, f"API Error: {_safe_error(err, api_key)}"
     except Exception as e:
-        return None, f"Connection Error: {str(e)}"
+        return None, f"Connection Error: {_safe_error(e, api_key)}"
