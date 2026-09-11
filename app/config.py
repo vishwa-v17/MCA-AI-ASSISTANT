@@ -1,34 +1,32 @@
 import os
-import json
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY') or os.urandom(24)
     DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'mca_assistant.db')
     CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'smartgpt_config.json')
     PROMPT_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'system-prompt.txt')
-    
-    _cached_api_config = None
-    
-    @classmethod
-    def load_api_config(cls):
-        if cls._cached_api_config is not None:
-            return cls._cached_api_config
-            
-        if os.path.exists(cls.CONFIG_FILE):
-            try:
-                with open(cls.CONFIG_FILE, "r") as f:
-                    cls._cached_api_config = json.load(f)
-                    return cls._cached_api_config
-            except Exception:
-                pass
-        return {}
 
-    @classmethod
-    def save_api_config(cls, data):
-        with open(cls.CONFIG_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-        cls._cached_api_config = data
-        
+    OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    USER_KEY_ENCRYPTION_SECRET = os.environ.get("USER_KEY_ENCRYPTION_SECRET", "").strip()
+    DEFAULT_OPENROUTER_MODEL = os.environ.get("DEFAULT_OPENROUTER_MODEL", "openrouter/free").strip()
+    OPENROUTER_MODEL_CACHE_TTL = int(os.environ.get("OPENROUTER_MODEL_CACHE_TTL", "900"))
+
+    # Per-user limits for the shared server key. Kept configurable so a
+    # college/demo deployment can tune them without changing source code.
+    AI_RATE_LIMIT_PER_MINUTE = int(os.environ.get("AI_RATE_LIMIT_PER_MINUTE", "10"))
+    AI_RATE_LIMIT_PER_HOUR = int(os.environ.get("AI_RATE_LIMIT_PER_HOUR", "100"))
+    MAX_AI_MESSAGE_LENGTH = int(os.environ.get("MAX_AI_MESSAGE_LENGTH", "12000"))
+
+    MAX_CONTENT_LENGTH = 10 * 1024 * 1024
+    ALLOWED_EXTENSIONS = {'pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'webp'}
+
     @classmethod
     def get_system_prompt(cls):
         if os.path.exists(cls.PROMPT_FILE):
@@ -36,6 +34,3 @@ class Config:
                 content = f.read().strip()
                 return content if content else "You are a helpful MCA Student AI Assistant."
         return "You are a helpful MCA Student AI Assistant."
-    # Security settings for uploads
-    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10 MB per file
-    ALLOWED_EXTENSIONS = {'pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'webp'}
