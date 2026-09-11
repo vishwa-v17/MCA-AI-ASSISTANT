@@ -2,6 +2,8 @@ from flask import Blueprint, jsonify, request, session, render_template, redirec
 from app.services.db_service import get_subjects, get_subject_by_code, get_generated_note, save_generated_note
 from app.services.llm_service import generate_text_sync
 from app.config import Config
+from database import get_user_ai_config
+from app.services.openrouter_service import get_server_api_key, get_default_model, validate_model
 
 subjects_bp = Blueprint('subjects', __name__)
 
@@ -159,17 +161,22 @@ def generate_notes():
     if cached_note:
         return jsonify({"content": cached_note})
         
-    # Get API config
-    api_config = Config.load_api_config()
-    api_key = api_config.get("api_key")
-    model = api_config.get("model")
-    
+    # Resolve the authenticated user's personal key first, then the
+    # server default key. Neither key is exposed to the browser.
+    try:
+        api_config = get_user_ai_config(session['user_id'])
+    except RuntimeError:
+        return jsonify({"error": "Stored personal API key could not be loaded. Please remove it and add it again."}), 500
+
+    api_key = api_config.get("api_key") or get_server_api_key()
+    model = api_config.get("model") or get_default_model()
+
     if not api_key:
-        return jsonify({"error": "API Key is missing. Go back to Dashboard → Settings and enter your OpenRouter API Key."}), 400
-    
-    if not model:
-        return jsonify({"error": "AI Model is missing. Go back to Dashboard → Settings and set a model name."}), 400
-        
+        return jsonify({"error": "AI service is not configured on the server."}), 503
+
+    if not validate_model(model, api_key):
+        return jsonify({"error": "This model is currently unavailable. Please select another model in Settings."}), 400
+
     # Build rich prompt from template
     prompt_template = PROMPT_TEMPLATES.get(note_type)
     if not prompt_template:
