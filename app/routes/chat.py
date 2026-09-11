@@ -16,7 +16,9 @@ from app.services.db_service import (
 from app.services.llm_service import generate_streaming_response
 from app.config import Config
 from app.routes.upload import _validate_and_save_file
-from database import get_user_api_config
+from database import get_user_ai_config
+from app.services.openrouter_service import get_server_api_key, get_default_model, validate_model
+from app.services.rate_limiter import user_rate_limiter
 
 
 chat_bp = Blueprint('chat', __name__)
@@ -255,18 +257,42 @@ def chat():
         prompt_for_ai = user_message
 
     # ---------------------------------------------------------
-    # IMPORTANT:
-    # Get API configuration ONLY for the logged-in user
+    # Resolve AI credentials server-side.
+    # Personal key wins; otherwise use the server environment key.
+    # Neither key is ever sent back to the browser.
     # ---------------------------------------------------------
+    try:
+        api_config = get_user_ai_config(user_id)
+    except RuntimeError:
+        return jsonify({"error": "Your saved personal API key could not be loaded. Please remove it from Settings and add it again."}), 500
 
-    api_config = get_user_api_config(user_id)
+    personal_key = api_config.get("api_key", "")
+    api_key = personal_key or get_server_api_key()
+    model = api_config.get("model") or get_default_model()
 
-    api_key = api_config.get("api_key")
-    model = api_config.get("model")
-
-    if not api_key or not model:
+    if not api_key:
         return jsonify({
-            "error": "Please add your OpenRouter API key and model in Settings."
+            "error": "AI service is not configured. Please contact the server administrator."
+        }), 503
+
+    if len(user_message) > Config.MAX_AI_MESSAGE_LENGTH:
+        return jsonify({
+            "error": f"Message is too long. Maximum allowed length is {Config.MAX_AI_MESSAGE_LENGTH} characters."
+        }), 400
+
+    # The shared server key is rate-limited per authenticated user.
+    if not personal_key and not user_rate_limiter.allow(
+        user_id,
+        Config.AI_RATE_LIMIT_PER_MINUTE,
+        Config.AI_RATE_LIMIT_PER_HOUR,
+    ):
+        return jsonify({
+            "error": "Request limit reached. Please try again later or use your personal OpenRouter API key."
+        }), 429
+
+    if not validate_model(model, api_key):
+        return jsonify({
+            "error": "This model is currently unavailable. Please select another model in Settings."
         }), 400
 
     # Fetch context
@@ -367,3 +393,4 @@ def chat():
     resp.headers['Connection'] = 'keep-alive'
 
     return resp
+
