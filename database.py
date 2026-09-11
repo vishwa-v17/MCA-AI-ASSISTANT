@@ -2,6 +2,8 @@ import sqlite3
 import os
 import json
 
+from app.services.key_service import encrypt_api_key, decrypt_api_key, key_last4
+
 DB_PATH = "mca_assistant.db"
 
 
@@ -79,23 +81,11 @@ def init_db():
     """)
 
     # =========================================================
-    # USER API CONFIG TABLE
-    #
-    # Each user gets their own OpenRouter API key and model.
-    #
-    # user A -> API key A
-    # user B -> API key B
-    # user C -> API key C
+    # USER AI CONFIGURATION
+    # Personal API keys are encrypted at rest. The server default
+    # key is NEVER stored in this table.
     # =========================================================
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS user_api_config (
-        user_id TEXT PRIMARY KEY,
-        api_key TEXT NOT NULL,
-        model TEXT NOT NULL,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-    """)
+    _migrate_user_api_config(conn, cursor)
 
     # =========================================================
     # INDEXES
@@ -1015,81 +1005,141 @@ def get_user_by_id(user_id):
 # USER API CONFIGURATION
 # =============================================================
 
-def save_user_api_config(user_id, api_key, model):
-    """
-    Save or update API configuration for ONE user.
+def _migrate_user_api_config(conn, cursor):
+    """Create/migrate user AI configuration without leaving plaintext keys."""
+    tables = cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='user_api_config'"
+    ).fetchall()
 
-    Each user has a separate row.
+    if not tables:
+        cursor.execute("""
+        CREATE TABLE user_api_config (
+            user_id TEXT PRIMARY KEY,
+            encrypted_api_key TEXT,
+            api_key_last4 TEXT,
+            api_key_enabled INTEGER NOT NULL DEFAULT 0,
+            model TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """)
+        return
 
-    User A:
-        user_id = A
-        api_key = KEY_A
+    columns = [row[1] for row in cursor.execute("PRAGMA table_info(user_api_config)").fetchall()]
+    if "api_key" not in columns:
+        return
 
-    User B:
-        user_id = B
-        api_key = KEY_B
-    """
+    # Older versions stored plaintext keys. Require the new encryption
+    # secret so they can be migrated rather than silently losing them.
+    legacy_rows = cursor.execute(
+        "SELECT user_id, api_key, model, updated_at FROM user_api_config"
+    ).fetchall()
 
+    migrated = []
+    for row in legacy_rows:
+        plaintext = row["api_key"] or ""
+        encrypted = encrypt_api_key(plaintext) if plaintext else ""
+        migrated.append((
+            row["user_id"],
+            encrypted,
+            key_last4(plaintext),
+            1 if plaintext else 0,
+            row["model"] or None,
+            row["updated_at"],
+        ))
+
+    cursor.execute("""
+    CREATE TABLE user_api_config_new (
+        user_id TEXT PRIMARY KEY,
+        encrypted_api_key TEXT,
+        api_key_last4 TEXT,
+        api_key_enabled INTEGER NOT NULL DEFAULT 0,
+        model TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    """)
+
+    if migrated:
+        cursor.executemany("""
+        INSERT INTO user_api_config_new
+        (user_id, encrypted_api_key, api_key_last4, api_key_enabled, model, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, migrated)
+
+    cursor.execute("DROP TABLE user_api_config")
+    cursor.execute("ALTER TABLE user_api_config_new RENAME TO user_api_config")
+
+def save_user_ai_config(user_id, api_key=None, model=None):
+    """Save a user's optional personal key and/or model preference."""
     conn = get_db_connection()
     cursor = conn.cursor()
+    existing = cursor.execute(
+        "SELECT encrypted_api_key, api_key_last4, api_key_enabled, model FROM user_api_config WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+
+    encrypted = existing["encrypted_api_key"] if existing else None
+    last4 = existing["api_key_last4"] if existing else ""
+    enabled = int(existing["api_key_enabled"]) if existing else 0
+    current_model = existing["model"] if existing else None
+
+    if api_key is not None:
+        encrypted = encrypt_api_key(api_key) if api_key else None
+        last4 = key_last4(api_key)
+        enabled = 1 if api_key else 0
+
+    if model is not None:
+        current_model = model or None
 
     cursor.execute("""
     INSERT INTO user_api_config
-    (user_id, api_key, model, updated_at)
-    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-
-    ON CONFLICT(user_id)
-    DO UPDATE SET
-        api_key = excluded.api_key,
+    (user_id, encrypted_api_key, api_key_last4, api_key_enabled, model, updated_at)
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id) DO UPDATE SET
+        encrypted_api_key = excluded.encrypted_api_key,
+        api_key_last4 = excluded.api_key_last4,
+        api_key_enabled = excluded.api_key_enabled,
         model = excluded.model,
         updated_at = CURRENT_TIMESTAMP
-    """, (
-        user_id,
-        api_key,
-        model
-    ))
-
+    """, (user_id, encrypted, last4, enabled, current_model))
     conn.commit()
     conn.close()
 
 
-def get_user_api_config(user_id):
-    """
-    Get API configuration belonging ONLY to the logged-in user.
-    """
-
+def get_user_ai_config(user_id):
+    """Return only server-side config; decrypted key never leaves this layer."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    SELECT api_key, model
+    row = conn.execute("""
+    SELECT encrypted_api_key, api_key_last4, api_key_enabled, model
     FROM user_api_config
     WHERE user_id = ?
-    """, (user_id,))
-
-    row = cursor.fetchone()
-
+    """, (user_id,)).fetchone()
     conn.close()
 
-    if row:
-        return dict(row)
+    if not row:
+        return {"api_key": "", "has_personal_key": False, "api_key_last4": "", "model": None}
 
-    return {}
+    api_key = ""
+    if row["api_key_enabled"] and row["encrypted_api_key"]:
+        api_key = decrypt_api_key(row["encrypted_api_key"])
+
+    return {
+        "api_key": api_key,
+        "has_personal_key": bool(api_key),
+        "api_key_last4": row["api_key_last4"] or "",
+        "model": row["model"],
+    }
+
+
+def get_user_api_config(user_id):
+    """Backward-compatible internal helper. Decrypted key is server-side only."""
+    return get_user_ai_config(user_id)
 
 
 def delete_user_api_config(user_id):
-    """
-    Delete API configuration for a specific user.
-    """
-
     conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    DELETE FROM user_api_config
-    WHERE user_id = ?
-    """, (user_id,))
-
+    conn.execute("DELETE FROM user_api_config WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 
@@ -1223,3 +1273,4 @@ def get_subjects():
         subjects.append(subj)
 
     return subjects
+
