@@ -68,7 +68,7 @@
         <div id="dashboard-view" class="content-view active" style="overflow-y: auto;">
             <div class="dashboard-section" style="padding-top: 24px;">
                 <div class="hero-section glass-panel" style="text-align: left; padding: 40px; margin-bottom: 30px;">
-                    <h1>Your <span class="gradient-text">MCA Assistant</span></h1>
+                    <h1>Your Advanced <span class="gradient-text">MCA Assistant</span></h1>
                     <p class="subtitle" style="margin-top: 10px;">Select a subject below to generate study notes, question papers, and get AI-powered tutoring.</p>
                 </div>
             </div>
@@ -157,31 +157,50 @@
 
 <!-- Modal for Configuration Settings -->
 <div id="config-modal" class="modal">
-    <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-content" style="max-width: 560px;">
         <span class="close-modal" onclick="closeConfigModal()">&times;</span>
         <div class="modal-header">
             <i class="fa-solid fa-gear modal-icon text-purple" style="font-size: 20px;"></i>
             <h3 style="margin-top: 6px;">Settings</h3>
         </div>
-        <p class="modal-desc" style="margin-bottom: 20px;">Edit the settings below. Saving will validate your credentials.</p>
-        
+        <p class="modal-desc" style="margin-bottom: 20px;">OpenRouter is ready by default. You can optionally use your own key and choose an available model.</p>
+
         <div class="form-group" style="margin-bottom: 18px;">
-            <label for="config-api-key" style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary);">OpenRouter API Key</label>
-            <div style="position: relative; display: flex; align-items: center;">
-                <input id="config-api-key" type="password" placeholder="sk-or-v1-..." style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); background-color: var(--bg-dark); color: white; outline: none; padding-right: 40px; font-size: 14px;" />
-                <button type="button" onclick="toggleApiKeyVisibility()" style="position: absolute; right: 10px; background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px;"><i class="fa-regular fa-eye" id="eye-icon"></i></button>
+            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary);">AI Provider</label>
+            <div style="padding: 11px 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-dark);">
+                <strong>OpenRouter</strong>
+                <div id="config-access-status" style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Checking access...</div>
             </div>
         </div>
 
-        <div class="form-group" style="margin-bottom: 24px;">
-            <label for="config-model" style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary);">Model Name</label>
-            <input id="config-model" type="text" placeholder="e.g., nvidia/nemotron-3-ultra-550b-a55b:free" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); background-color: var(--bg-dark); color: white; outline: none; font-size: 14px;" />
+        <div class="form-group" style="margin-bottom: 18px;">
+            <label for="config-api-key" style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary);">Personal OpenRouter API Key <span style="font-weight: 400;">(Optional)</span></label>
+            <div style="position: relative; display: flex; align-items: center;">
+                <input id="config-api-key" type="password" autocomplete="off" placeholder="Enter your own key" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); background-color: var(--bg-dark); color: white; outline: none; padding-right: 40px; font-size: 14px;" />
+                <button type="button" onclick="toggleApiKeyVisibility()" style="position: absolute; right: 10px; background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px;"><i class="fa-regular fa-eye" id="eye-icon"></i></button>
+            </div>
+            <div id="personal-key-status" style="font-size: 12px; color: var(--text-muted); margin-top: 7px;"></div>
+            <div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;">
+                <button type="button" class="nav-btn" id="validate-key-btn" onclick="validatePersonalKey()" style="padding: 7px 12px; font-size: 12px;">
+                    <i class="fa-solid fa-shield-check"></i> Validate Key
+                </button>
+                <button type="button" class="nav-btn" id="remove-key-btn" onclick="removePersonalKey()" style="padding: 7px 12px; font-size: 12px;">
+                    <i class="fa-solid fa-key"></i> Remove Personal Key
+                </button>
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 18px;">
+            <label for="config-model-search" style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary);">AI Model</label>
+            <input id="config-model-search" type="search" placeholder="Search model..." autocomplete="off" oninput="filterModelOptions()" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-color); background-color: var(--bg-dark); color: white; outline: none; font-size: 13px; margin-bottom: 8px;" />
+            <select id="config-model" size="6" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--border-color); background-color: var(--bg-dark); color: white; outline: none; font-size: 13px;"></select>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">Free models are detected dynamically from OpenRouter pricing. The Free Router can automatically choose an available free model.</div>
         </div>
 
         <div id="config-status-msg" style="display: none; font-size: 12.5px; font-weight: 500; margin-bottom: 20px; padding: 12px; border-radius: 8px;"></div>
 
         <button class="modal-action-btn" id="save-config-btn" onclick="saveConfig()">
-            <i class="fa-solid fa-floppy-disk"></i> Save Configuration
+            <i class="fa-solid fa-floppy-disk"></i> Save Settings
         </button>
     </div>
 </div>
@@ -223,3 +242,4 @@
     </div>
 
 </section>
+
