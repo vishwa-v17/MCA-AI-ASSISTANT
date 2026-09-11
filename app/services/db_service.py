@@ -1,6 +1,8 @@
 import sqlite3
 import json
+
 from app.config import Config
+from app.services.key_service import encrypt_api_key, key_last4
 
 def get_db_connection():
     conn = sqlite3.connect(Config.DB_PATH)
