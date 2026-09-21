@@ -1492,3 +1492,68 @@ body.light-theme .modal-content {
     color: #1a1d24;
     border-color: var(--border-color);
 }
+
+/* =========================================
+   LIGHT MODE - SEMESTER TABS
+   ========================================= */
+
+body.light-theme .sem-tab {
+    background: transparent;
+    color: #374151;
+    border-color: #d1d5db;
+}
+
+body.light-theme .sem-tab.active {
+    background: #2563eb !important;
+    color: #ffffff !important;
+    border-color: #2563eb !important;
+    box-shadow: 0 4px 10px rgba(37, 99, 235, 0.25);
+}
+
+body.light-theme .sem-tab:hover {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+
+/* =========================================
+   LIGHT MODE - CHAT PROMPT
+   ========================================= */
+
+body.light-theme .input-wrapper {
+    background: #ffffff !important;
+    border-color: #d1d5db !important;
+}
+
+body.light-theme #msg {
+    background: #ffffff !important;
+    color: #1f2937 !important;
+}
+
+body.light-theme #msg::placeholder {
+    color: #6b7280 !important;
+}
+
+
+/* =========================================
+   LIGHT MODE - QUICK PROMPT CARDS
+   ========================================= */
+
+body.light-theme .prompt-card {
+    background: #ffffff !important;
+    color: #1f2937 !important;
+    border-color: #d1d5db !important;
+}
+
+body.light-theme .prompt-card h4 {
+    color: #1f2937 !important;
+}
+
+body.light-theme .prompt-card p {
+    color: #6b7280 !important;
+}
+
+body.light-theme .prompt-card:hover {
+    background: #f8fafc !important;
+    border-color: #2563eb !important;
+}
