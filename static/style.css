@@ -1358,7 +1358,7 @@ MOBILE RESPONSIVE
 
 /* Dark Theme */
 body.dark-theme {
-    --bg-dark: #0f1117;
+    --bg-blue: #0f1117;
     --bg-card: #171a21;
     --bg-secondary: #1d212b;
     --text-primary: #ffffff;
