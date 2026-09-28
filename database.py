@@ -1148,6 +1148,17 @@ def delete_user_api_config(user_id):
 # SESSION CRUD OPERATIONS
 # =============================================================
 
+def is_session_owned_by_user(session_id, user_id):
+    if not session_id or not user_id:
+        return False
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row)
+
+
 def create_session(session_id, user_id, title):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1184,14 +1195,21 @@ def get_sessions(user_id):
     return [dict(r) for r in rows]
 
 
-def delete_session(session_id):
+def delete_session(session_id, user_id=None):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
-    DELETE FROM sessions
-    WHERE id = ?
-    """, (session_id,))
+    if user_id:
+        cursor.execute("""
+        DELETE FROM sessions
+        WHERE id = ?
+        AND user_id = ?
+        """, (session_id, user_id))
+    else:
+        cursor.execute("""
+        DELETE FROM sessions
+        WHERE id = ?
+        """, (session_id,))
 
     conn.commit()
     conn.close()
