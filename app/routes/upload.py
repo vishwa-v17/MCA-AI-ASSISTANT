@@ -1,272 +1,206 @@
-from flask import Blueprint, request, jsonify, flash, redirect, url_for, current_app, session, render_template
-import os
-import uuid
-import io
-import zipfile
-import xml.etree.ElementTree as ET
-from werkzeug.utils import secure_filename
+from flask import Blueprint, jsonify, request, session, render_template, redirect, url_for
+from app.services.db_service import get_subjects, get_subject_by_code, get_generated_note, save_generated_note
+from app.services.llm_service import generate_text_sync
 from app.config import Config
+from database import get_user_ai_config
+from app.services.openrouter_service import get_server_api_key, get_default_model, validate_model
 
-upload_bp = Blueprint('upload', __name__)
+from app.services.rate_limiter import user_rate_limiter
 
-DANGEROUS_EXTENSIONS = {
-    'exe', 'bat', 'cmd', 'js', 'py', 'php', 'sh', 'html', 'htm',
-    'svg', 'vbs', 'ps1', 'jar', 'msi', 'dll', 'com', 'scr', 'vbe', 'wsf'
+subjects_bp = Blueprint('subjects', __name__)
+
+# Detailed prompt templates for each generation type
+PROMPT_TEMPLATES = {
+    "overview": """You are an expert MCA professor. Generate a comprehensive overview for the subject "{name}" (Code: {code}, Semester {semester}).
+
+Include the following sections in Markdown:
+## Subject Overview
+A detailed paragraph explaining what this subject covers and why it matters.
+
+## Learning Outcomes
+List 6-8 specific learning outcomes students should achieve.
+
+## Important Topics
+List the most important topics for exams.
+
+## Practical Applications
+Explain real-world applications of this subject.
+
+## Study Tips
+Give 5-6 actionable study tips specific to this subject.
+
+## Recommended Books
+List 3-4 standard textbooks with author names.
+
+## Recommended YouTube Channels
+List 3-4 helpful YouTube channels or playlists for this subject.
+
+Be detailed, accurate, and helpful for MCA students.""",
+
+    "summary": """You are an expert MCA professor. Generate comprehensive module-wise study notes for the subject "{name}" (Code: {code}, Semester {semester}).
+
+Structure the notes as follows in Markdown:
+
+## Module-wise Notes
+Create detailed notes for each module/unit covering key concepts, definitions, formulas, and examples.
+
+## Summary of Key Points
+A bulleted list of the most critical points to remember.
+
+## Frequently Asked Questions
+List 10 commonly asked questions with brief answers.
+
+## Exam Preparation Tips
+Specific tips for preparing for the exam of this subject.
+
+## Important Formulas / Definitions
+List all critical formulas and definitions.
+
+Make it thorough, well-organized, and exam-focused for MCA students.""",
+
+    "paper_5m": """You are an expert MCA professor. Generate a set of 5-marks exam questions for the subject "{name}" (Code: {code}, Semester {semester}).
+
+Generate exactly 15 questions worth 5 marks each in Markdown format.
+
+For each question:
+- Write the question clearly
+- Provide a model answer that would score full marks (approximately 200 words per answer)
+- Include diagrams described in text where appropriate
+
+Cover all modules/units of the syllabus evenly. Include a mix of:
+- Explain/Describe type questions
+- Compare and contrast questions
+- Short numerical/code problems
+- Definition-based questions
+
+Format each as:
+### Q1. [Question text] (5 Marks)
+**Answer:** [Detailed model answer]
+
+Make it realistic and exam-focused for MCA students.""",
+
+    "paper_10m": """You are an expert MCA professor. Generate a set of 10-marks exam questions for the subject "{name}" (Code: {code}, Semester {semester}).
+
+Generate exactly 10 questions worth 10 marks each in Markdown format.
+
+For each question:
+- Write the question clearly (may have sub-parts a, b)
+- Provide a comprehensive model answer (approximately 400-500 words per answer)
+- Include algorithms, code examples, diagrams described in text where appropriate
+
+Cover all modules/units of the syllabus evenly. Include a mix of:
+- Long answer theory questions
+- Algorithm/code writing questions
+- Case study or scenario-based questions
+- Proof/derivation questions (if applicable)
+
+Format each as:
+### Q1. [Question text] (10 Marks)
+**Answer:** [Detailed model answer]
+
+Make it realistic and exam-focused for MCA students.""",
+
+    "viva": """You are an expert MCA professor. Generate a comprehensive set of viva voce questions for the subject "{name}" (Code: {code}, Semester {semester}).
+
+Generate 25 viva questions organized by difficulty in Markdown format.
+
+## Basic Level Questions (10 questions)
+Simple definition and concept questions with one-line answers.
+
+## Intermediate Level Questions (10 questions)  
+Questions requiring explanation and understanding with 2-3 line answers.
+
+## Advanced Level Questions (5 questions)
+Deep conceptual questions that test thorough understanding with detailed answers.
+
+For each question provide:
+### Q: [Question]
+**A:** [Clear, concise answer]
+
+Also include:
+## Tips for Viva Preparation
+5 practical tips for performing well in the viva.
+
+Make it realistic and helpful for MCA students preparing for lab viva or external exams."""
 }
 
-
-def _validate_and_save_file(file_storage):
-    """
-    Validates uploaded file size, extension, and deep magic-byte / file signature.
-    Returns: (is_valid: bool, error_message: str, unique_name: str, extracted_text: str)
-    """
-    filename = file_storage.filename
-
-    if not filename:
-        return False, 'No file selected.', None, None
-
-    # Check file size (10 MB limit)
-    file_storage.seek(0, os.SEEK_END)
-    size = file_storage.tell()
-    file_storage.seek(0)
-
-    if size > Config.MAX_CONTENT_LENGTH:
-        return False, 'File size must not exceed 10 MB.', None, None
-
-    if size == 0:
-        return False, 'The selected file is empty.', None, None
-
-    # Extension validation
-    ext = os.path.splitext(filename)[1].lower().lstrip('.')
-
-    if ext in DANGEROUS_EXTENSIONS or ext not in Config.ALLOWED_EXTENSIONS:
-        return False, 'Unsupported file type. Allowed: PDF, Word (.doc, .docx), Images (.jpg, .jpeg, .png, .webp).', None, None
-
-    extracted_text = ""
-
-    # Deep signature & integrity validation
-    if ext == 'pdf':
-        header = file_storage.read(1024)
-        file_storage.seek(0)
-
-        if not header.startswith(b'%PDF'):
-            return False, 'File content does not match PDF format.', None, None
-
-        try:
-            import pypdf
-
-            reader = pypdf.PdfReader(file_storage)
-
-            if len(reader.pages) == 0:
-                return False, 'PDF file contains no readable pages.', None, None
-
-            # Safely extract text from first few pages for academic context
-            for page in reader.pages[:10]:
-                text = page.extract_text()
-
-                if text:
-                    extracted_text += text + "\n"
-
-        except Exception:
-            return False, 'Invalid or corrupted PDF file.', None, None
-
-        finally:
-            file_storage.seek(0)
-
-    elif ext == 'docx':
-        header = file_storage.read(4)
-        file_storage.seek(0)
-
-        if header != b'PK\x03\x04':
-            return False, 'File content does not match DOCX format.', None, None
-
-        try:
-            with zipfile.ZipFile(file_storage) as z:
-                namelist = z.namelist()
-
-                if '[Content_Types].xml' not in namelist:
-                    return False, 'Invalid or corrupted Word document.', None, None
-
-                if 'word/document.xml' in namelist:
-                    xml_content = z.read('word/document.xml')
-                    tree = ET.fromstring(xml_content)
-
-                    texts = [
-                        node.text
-                        for node in tree.iter()
-                        if node.tag.endswith('}t') and node.text
-                    ]
-
-                    extracted_text = " ".join(texts)
-
-        except Exception:
-            return False, 'Invalid or corrupted Word document.', None, None
-
-        finally:
-            file_storage.seek(0)
-
-    elif ext == 'doc':
-        header = file_storage.read(8)
-        file_storage.seek(0)
-
-        if not (
-            header.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1')
-            or header.startswith(b'\xd0\xcf\x11\xe0')
-        ):
-            return False, 'File content does not match Word (.doc) format.', None, None
-
-        extracted_text = "[Word document attached]"
-
-    elif ext in ('jpg', 'jpeg', 'png', 'webp'):
-        header = file_storage.read(32)
-        file_storage.seek(0)
-
-        # JPEG validation
-        if ext in ('jpg', 'jpeg'):
-            # JPEG magic bytes: FF D8 FF
-            if not header.startswith(b'\xff\xd8\xff'):
-                return False, 'Invalid or corrupted JPEG image.', None, None
-
-        # PNG validation
-        elif ext == 'png':
-            # PNG magic bytes
-            if not header.startswith(b'\x89PNG\r\n\x1a\n'):
-                return False, 'Invalid or corrupted PNG image.', None, None
-
-        # WEBP validation
-        elif ext == 'webp':
-            # WEBP format: RIFF....WEBP
-            is_webp = (
-                header.startswith(b'RIFF')
-                and len(header) >= 12
-                and header[8:12] == b'WEBP'
-            )
-
-            if not is_webp:
-                return False, 'Invalid or corrupted WEBP image.', None, None
-
-        extracted_text = f"[{ext.upper()} image attached]"
-
-    else:
-        return False, 'Unsupported file type.', None, None
-
-    # Secure unique storage filename
-    unique_name = f"{uuid.uuid4().hex}.{ext}"
-
-    upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
-    save_path = os.path.join(upload_folder, unique_name)
-
-    # Path traversal protection
-    upload_folder_abs = os.path.abspath(upload_folder)
-    save_path_abs = os.path.abspath(save_path)
-
-    if not save_path_abs.startswith(upload_folder_abs):
-        return False, 'Security validation failure.', None, None
-
-    file_storage.save(save_path)
-
-    return True, '', unique_name, extracted_text
-
-
-@upload_bp.route('/upload', methods=['GET', 'POST'])
-def upload_file():
-    is_ajax = (
-        request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-        or request.is_json
-    )
-
-    # Require a logged-in user
+@subjects_bp.route('/api/subjects', methods=['GET'])
+def get_subjects_api():
     if 'user_id' not in session:
-        if is_ajax:
-            return jsonify({'error': 'Unauthorized. Please log in.'}), 401
+        return jsonify({"error": "Unauthorized"}), 401
+    subjects = get_subjects()
+    return jsonify({"subjects": subjects})
 
+@subjects_bp.route('/subject/<string:code>', methods=['GET'])
+def subject_page(code):
+    if 'user_id' not in session:
         return redirect(url_for('auth.login'))
+    
+    subject = get_subject_by_code(code)
+    if not subject:
+        return "Subject not found", 404
+        
+    return render_template('subject.html', subject=subject)
 
-    if request.method == 'POST':
+@subjects_bp.route('/api/generate_notes', methods=['POST'])
+def generate_notes():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
 
-        if 'file' not in request.files:
-            if is_ajax:
-                return jsonify({'error': 'No file selected.'}), 400
+    user_id = session['user_id']
+    if not user_rate_limiter.allow_window(f"notes:{user_id}", 10, 60):
+        return jsonify({"error": "Rate limit exceeded. Please wait a moment before generating more study notes."}), 429
 
-            flash('No file selected.', 'error')
-            return redirect(url_for('upload.upload_file'))
+    data = request.json or {}
+    subject_code = str(data.get("subject_code") or "").strip()
+    note_type = str(data.get("note_type") or "").strip()
 
-        file = request.files['file']
+    if not subject_code or not note_type:
+        return jsonify({"error": "Missing subject_code or note_type"}), 400
 
-        valid, msg, unique_name, extracted_text = _validate_and_save_file(file)
+    if note_type not in PROMPT_TEMPLATES:
+        return jsonify({"error": f"Invalid note type requested: {note_type[:30]}"}), 400
+    
+    subject = get_subject_by_code(subject_code)
+    if not subject:
+        return jsonify({"error": "Subject not found"}), 404
+        
+    # Check cache first
+    cached_note = get_generated_note(subject_code, note_type)
+    if cached_note:
+        return jsonify({"content": cached_note})
+        
+    # Resolve the authenticated user's personal key first, then the
+    # server default key. Neither key is exposed to the browser.
+    try:
+        api_config = get_user_ai_config(session['user_id'])
+    except RuntimeError:
+        return jsonify({"error": "Stored personal API key could not be loaded. Please remove it and add it again."}), 500
 
-        if not valid:
-            if is_ajax:
-                return jsonify({'error': msg}), 400
+    api_key = api_config.get("api_key") or get_server_api_key()
+    model = api_config.get("model") or get_default_model()
 
-            flash(msg, 'error')
-            return redirect(url_for('upload.upload_file'))
+    if not api_key:
+        return jsonify({"error": "AI service is not configured on the server."}), 503
 
-        # Construct prompt for AI workflow
-        user_prompt = request.form.get('prompt', '').strip()
-        safe_name = secure_filename(file.filename) or unique_name
+    if not validate_model(model, api_key):
+        return jsonify({"error": "This model is currently unavailable. Please select another model in Settings."}), 400
 
-        if extracted_text and len(extracted_text.strip()) > 0:
-
-            truncated = extracted_text.strip()[:6000]
-
-            if len(extracted_text.strip()) > 6000:
-                truncated += "\n[... Document content truncated for length ...]"
-
-            if user_prompt:
-                ai_prompt = (
-                    f"📎 [Uploaded Document: {safe_name}]\n\n"
-                    f"--- Document Content ---\n"
-                    f"{truncated}\n\n"
-                    f"--- Student Question/Task ---\n"
-                    f"{user_prompt}"
-                )
-            else:
-                ai_prompt = (
-                    f"📎 [Uploaded Document: {safe_name}]\n\n"
-                    f"--- Document Content ---\n"
-                    f"{truncated}\n\n"
-                    f"Please analyze this document and summarize the key MCA topics and concepts it covers."
-                )
-
-        else:
-
-            if user_prompt:
-                ai_prompt = (
-                    f"📎 [Uploaded File: {safe_name}]\n\n"
-                    f"{user_prompt}"
-                )
-            else:
-                ai_prompt = (
-                    f"📎 [Uploaded File: {safe_name}]\n\n"
-                    f"Please review and explain the academic concepts related to this attached MCA study material."
-                )
-
-        if is_ajax:
-            return jsonify({
-                'status': 'success',
-                'filename': safe_name,
-                'ai_prompt': ai_prompt
-            })
-
-        flash('File uploaded successfully.', 'success')
-        return redirect(url_for('upload.upload_file'))
-
-    # GET – render upload page
-    return render_template('upload.html')
-
-
-@upload_bp.app_errorhandler(413)
-def handle_large_file(e):
-    is_ajax = (
-        request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-        or request.is_json
-        or request.path == '/chat'
-        or request.path.startswith('/api/')
+    # Build rich prompt from template
+    prompt_template = PROMPT_TEMPLATES.get(note_type)
+    if not prompt_template:
+        return jsonify({"error": f"Unknown note type: {note_type}"}), 400
+        
+    prompt = prompt_template.format(
+        name=subject['name'],
+        code=subject['code'],
+        semester=subject['semester']
     )
-
-    if is_ajax:
-        return jsonify({'error': 'File size must not exceed 10 MB.'}), 413
-
-    flash('File size must not exceed 10 MB.', 'error')
-    return redirect(url_for('upload.upload_file'))
+    
+    content, err_msg = generate_text_sync(prompt, model, api_key)
+    if err_msg or not content:
+        return jsonify({"error": err_msg or "Failed to generate content. Please check your API key and model in Settings."}), 500
+        
+    # Cache the result for future use
+    save_generated_note(subject_code, note_type, content)
+    return jsonify({"content": content})
