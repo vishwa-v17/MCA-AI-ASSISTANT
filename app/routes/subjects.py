@@ -5,6 +5,8 @@ from app.config import Config
 from database import get_user_ai_config
 from app.services.openrouter_service import get_server_api_key, get_default_model, validate_model
 
+from app.services.rate_limiter import user_rate_limiter
+
 subjects_bp = Blueprint('subjects', __name__)
 
 # Detailed prompt templates for each generation type
@@ -144,13 +146,20 @@ def subject_page(code):
 def generate_notes():
     if 'user_id' not in session:
         return jsonify({"error": "Unauthorized"}), 401
-        
-    data = request.json
-    subject_code = data.get("subject_code")
-    note_type = data.get("note_type")
-    
+
+    user_id = session['user_id']
+    if not user_rate_limiter.allow_window(f"notes:{user_id}", 10, 60):
+        return jsonify({"error": "Rate limit exceeded. Please wait a moment before generating more study notes."}), 429
+
+    data = request.json or {}
+    subject_code = str(data.get("subject_code") or "").strip()
+    note_type = str(data.get("note_type") or "").strip()
+
     if not subject_code or not note_type:
         return jsonify({"error": "Missing subject_code or note_type"}), 400
+
+    if note_type not in PROMPT_TEMPLATES:
+        return jsonify({"error": f"Invalid note type requested: {note_type[:30]}"}), 400
     
     subject = get_subject_by_code(subject_code)
     if not subject:
