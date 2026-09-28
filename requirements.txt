@@ -4,3 +4,5 @@ gunicorn
 pypdf
 cryptography
 python-dotenv
+flask-wtf
+defusedxml
