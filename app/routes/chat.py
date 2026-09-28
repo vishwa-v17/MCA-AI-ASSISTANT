@@ -10,7 +10,8 @@ from app.services.db_service import (
     get_session_messages,
     save_message,
     rename_session,
-    toggle_pin_session
+    toggle_pin_session,
+    is_session_owned_by_user
 )
 
 from app.services.llm_service import generate_streaming_response
@@ -18,7 +19,7 @@ from app.config import Config
 from app.routes.upload import _validate_and_save_file
 from database import get_user_ai_config
 from app.services.openrouter_service import get_server_api_key, get_default_model, validate_model
-from app.services.rate_limiter import user_rate_limiter
+from app.services.rate_limiter import user_rate_limiter, get_client_ip
 
 
 chat_bp = Blueprint('chat', __name__)
@@ -38,7 +39,8 @@ def sessions_api():
 
     if request.method == 'POST':
         data = request.json or {}
-        title = data.get('title', 'New Chat Session')
+        raw_title = data.get('title', 'New Chat Session')
+        title = str(raw_title).strip()[:100] or 'New Chat Session'
 
         session_id = str(uuid.uuid4())
 
@@ -76,13 +78,17 @@ def rename_session_api(session_id):
     if 'user_id' not in session:
         return jsonify({"error": "Unauthorized"}), 401
 
+    user_id = session['user_id']
+    if not is_session_owned_by_user(session_id, user_id):
+        return jsonify({"error": "Session not found"}), 404
+
     data = request.json or {}
-    new_title = data.get('title')
+    new_title = str(data.get('title') or '').strip()[:100]
 
     if new_title:
         rename_session(
             session_id,
-            session['user_id'],
+            user_id,
             new_title
         )
 
@@ -101,12 +107,16 @@ def pin_session_api(session_id):
     if 'user_id' not in session:
         return jsonify({"error": "Unauthorized"}), 401
 
+    user_id = session['user_id']
+    if not is_session_owned_by_user(session_id, user_id):
+        return jsonify({"error": "Session not found"}), 404
+
     data = request.json or {}
-    is_pinned = data.get('is_pinned', False)
+    is_pinned = bool(data.get('is_pinned', False))
 
     toggle_pin_session(
         session_id,
-        session['user_id'],
+        user_id,
         is_pinned
     )
 
@@ -120,6 +130,10 @@ def session_messages_api(session_id):
 
     if 'user_id' not in session:
         return jsonify({"error": "Unauthorized"}), 401
+
+    user_id = session['user_id']
+    if not is_session_owned_by_user(session_id, user_id):
+        return jsonify({"error": "Session not found"}), 404
 
     messages = get_session_messages(session_id)
 
@@ -171,6 +185,18 @@ def chat():
         return jsonify({
             "error": "Missing message, session_id, or file"
         }), 400
+
+    # Ensure user owns this session (IDOR prevention)
+    if not is_session_owned_by_user(session_id, user_id):
+        return jsonify({
+            "error": "Session not found"
+        }), 404
+
+    # Rate limit chat turns per authenticated user (30 per minute)
+    if not user_rate_limiter.allow_window(f"chat:{user_id}", 30, 60):
+        return jsonify({
+            "error": "Too many requests. Please wait a moment before sending another message."
+        }), 429
 
     # If an attached file was sent with the message
     if file and file.filename:
