@@ -7,6 +7,7 @@ from app.services.openrouter_service import (
     get_model_catalog,
     validate_model,
 )
+from app.services.rate_limiter import user_rate_limiter
 
 config_bp = Blueprint('config', __name__)
 
@@ -81,10 +82,16 @@ def validate_key():
     if not user_id:
         return jsonify({"error": "Unauthorized"}), 401
 
+    if not user_rate_limiter.allow_window(f"valkey:{user_id}", 10, 60):
+        return jsonify({"status": "error", "message": "Too many key validations. Please wait a moment."}), 429
+
     data = request.get_json(silent=True) or {}
     api_key = str(data.get("api_key") or "").strip()
     if not api_key:
         return jsonify({"status": "error", "message": "Enter an OpenRouter API key to validate."}), 400
+
+    if len(api_key) > 256:
+        return jsonify({"status": "error", "message": "Invalid API key format."}), 400
 
     # Validation is performed against OpenRouter without persisting the key.
     catalog, error = get_model_catalog(api_key, force=True)
@@ -104,9 +111,12 @@ def set_config():
     if not user_id:
         return jsonify({"error": "Unauthorized"}), 401
 
+    if not user_rate_limiter.allow_window(f"setcfg:{user_id}", 20, 60):
+        return jsonify({"status": "error", "message": "Too many configuration changes. Please wait a moment."}), 429
+
     data = request.get_json(silent=True) or {}
     new_api_key = data.get("api_key")
-    model = str(data.get("model") or "").strip()
+    model = str(data.get("model") or "").strip()[:100]
 
     try:
         current = get_user_ai_config(user_id)
