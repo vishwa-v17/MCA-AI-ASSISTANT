@@ -1,3 +1,30 @@
+function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+}
+
+// Automatically attach CSRF token to state-changing fetch requests
+const _originalFetch = window.fetch;
+window.fetch = function(url, options = {}) {
+    const method = (options.method || 'GET').toUpperCase();
+    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+        const token = getCsrfToken();
+        if (token) {
+            if (!options.headers) {
+                options.headers = {};
+            }
+            if (options.headers instanceof Headers) {
+                if (!options.headers.has('X-CSRFToken')) {
+                    options.headers.append('X-CSRFToken', token);
+                }
+            } else {
+                options.headers['X-CSRFToken'] = token;
+            }
+        }
+    }
+    return _originalFetch(url, options);
+};
+
 let activeSessionId = null;
 let subjectsData = [];
 let currentSemester = 1;
@@ -357,7 +384,8 @@ async function streamAIChatResponse(fetchOptions) {
                         } else if (parsed.content) {
                             accumulatedText += parsed.content;
                             if (window.marked) {
-                                bubble.innerHTML = marked.parse(accumulatedText);
+                                const rawHtml = marked.parse(accumulatedText);
+                                bubble.innerHTML = window.DOMPurify ? DOMPurify.sanitize(rawHtml) : rawHtml;
                             } else {
                                 bubble.innerText = accumulatedText;
                             }
@@ -474,7 +502,8 @@ function addMessage(text, sender) {
 
     if (sender === "bot") {
         if (window.marked) {
-            bubble.innerHTML = marked.parse(text);
+            const rawHtml = marked.parse(text);
+            bubble.innerHTML = window.DOMPurify ? DOMPurify.sanitize(rawHtml) : rawHtml;
         } else {
             bubble.innerText = text;
         }
