@@ -1,1138 +1,206 @@
-import sqlite3
-import json
-import os
-
+from flask import Blueprint, jsonify, request, session, render_template, redirect, url_for
+from app.services.db_service import get_subjects, get_subject_by_code, get_generated_note, save_generated_note
+from app.services.llm_service import generate_text_sync
 from app.config import Config
-from app.services.key_service import encrypt_api_key, key_last4
+from database import get_user_ai_config
+from app.services.openrouter_service import get_server_api_key, get_default_model, validate_model
 
+from app.services.rate_limiter import user_rate_limiter
 
-def get_db_connection():
-    """
-    Create and return a SQLite database connection.
-    Row factory allows rows to be accessed like dictionaries.
-    """
-    conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+subjects_bp = Blueprint('subjects', __name__)
 
+# Detailed prompt templates for each generation type
+PROMPT_TEMPLATES = {
+    "overview": """You are an expert MCA professor. Generate a comprehensive overview for the subject "{name}" (Code: {code}, Semester {semester}).
 
-# ============================================================
-# USER API CONFIGURATION MIGRATION
-# ============================================================
+Include the following sections in Markdown:
+## Subject Overview
+A detailed paragraph explaining what this subject covers and why it matters.
 
-def migrate_user_api_config(conn):
-    """
-    Safely create or migrate the user_api_config table.
+## Learning Outcomes
+List 6-8 specific learning outcomes students should achieve.
 
-    OLD DATABASE SCHEMA:
-        user_id
-        api_key
-        model
-        updated_at
+## Important Topics
+List the most important topics for exams.
 
-    NEW DATABASE SCHEMA:
-        user_id
-        encrypted_api_key
-        api_key_last4
-        api_key_enabled
-        model
-        updated_at
+## Practical Applications
+Explain real-world applications of this subject.
 
-    Existing users are preserved.
+## Study Tips
+Give 5-6 actionable study tips specific to this subject.
 
-    Existing plaintext API keys are encrypted during migration.
-    """
+## Recommended Books
+List 3-4 standard textbooks with author names.
 
-    cursor = conn.cursor()
+## Recommended YouTube Channels
+List 3-4 helpful YouTube channels or playlists for this subject.
 
-    # --------------------------------------------------------
-    # Check whether user_api_config table exists
-    # --------------------------------------------------------
+Be detailed, accurate, and helpful for MCA students.""",
 
-    table_exists = cursor.execute("""
-        SELECT name
-        FROM sqlite_master
-        WHERE type = 'table'
-        AND name = 'user_api_config'
-    """).fetchone()
+    "summary": """You are an expert MCA professor. Generate comprehensive module-wise study notes for the subject "{name}" (Code: {code}, Semester {semester}).
 
-    # --------------------------------------------------------
-    # CASE 1:
-    # Table does not exist.
-    # Create the new table.
-    # --------------------------------------------------------
+Structure the notes as follows in Markdown:
 
-    if not table_exists:
+## Module-wise Notes
+Create detailed notes for each module/unit covering key concepts, definitions, formulas, and examples.
 
-        cursor.execute("""
-        CREATE TABLE user_api_config (
-            user_id TEXT PRIMARY KEY,
-            encrypted_api_key TEXT,
-            api_key_last4 TEXT,
-            api_key_enabled INTEGER NOT NULL DEFAULT 0,
-            model TEXT,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id)
-                REFERENCES users(id)
-                ON DELETE CASCADE
-        )
-        """)
+## Summary of Key Points
+A bulleted list of the most critical points to remember.
 
-        return
+## Frequently Asked Questions
+List 10 commonly asked questions with brief answers.
 
-    # --------------------------------------------------------
-    # Get existing columns
-    # --------------------------------------------------------
+## Exam Preparation Tips
+Specific tips for preparing for the exam of this subject.
 
-    columns = [
-        row["name"]
-        for row in cursor.execute(
-            "PRAGMA table_info(user_api_config)"
-        ).fetchall()
-    ]
+## Important Formulas / Definitions
+List all critical formulas and definitions.
 
-    # --------------------------------------------------------
-    # CASE 2:
-    # Already using new schema.
-    # Nothing needs to be migrated.
-    # --------------------------------------------------------
+Make it thorough, well-organized, and exam-focused for MCA students.""",
 
-    if "encrypted_api_key" in columns:
-        return
+    "paper_5m": """You are an expert MCA professor. Generate a set of 5-marks exam questions for the subject "{name}" (Code: {code}, Semester {semester}).
 
-    # --------------------------------------------------------
-    # CASE 3:
-    # Old schema contains plaintext api_key.
-    # Migrate it safely.
-    # --------------------------------------------------------
+Generate exactly 15 questions worth 5 marks each in Markdown format.
 
-    if "api_key" in columns:
+For each question:
+- Write the question clearly
+- Provide a model answer that would score full marks (approximately 200 words per answer)
+- Include diagrams described in text where appropriate
 
-        encryption_secret = os.getenv(
-            "USER_KEY_ENCRYPTION_SECRET"
-        )
+Cover all modules/units of the syllabus evenly. Include a mix of:
+- Explain/Describe type questions
+- Compare and contrast questions
+- Short numerical/code problems
+- Definition-based questions
 
-        if not encryption_secret:
-            raise RuntimeError(
-                "USER_KEY_ENCRYPTION_SECRET is not configured. "
-                "Existing user API keys cannot be migrated safely."
-            )
+Format each as:
+### Q1. [Question text] (5 Marks)
+**Answer:** [Detailed model answer]
 
-        # Read existing records before replacing the table.
-        old_rows = cursor.execute("""
-            SELECT user_id, api_key, model, updated_at
-            FROM user_api_config
-        """).fetchall()
+Make it realistic and exam-focused for MCA students.""",
 
-        # ----------------------------------------------------
-        # Create temporary new table
-        # ----------------------------------------------------
+    "paper_10m": """You are an expert MCA professor. Generate a set of 10-marks exam questions for the subject "{name}" (Code: {code}, Semester {semester}).
 
-        cursor.execute("""
-        CREATE TABLE user_api_config_new (
-            user_id TEXT PRIMARY KEY,
-            encrypted_api_key TEXT,
-            api_key_last4 TEXT,
-            api_key_enabled INTEGER NOT NULL DEFAULT 0,
-            model TEXT,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id)
-                REFERENCES users(id)
-                ON DELETE CASCADE
-        )
-        """)
+Generate exactly 10 questions worth 10 marks each in Markdown format.
 
-        # ----------------------------------------------------
-        # Migrate each existing user
-        # ----------------------------------------------------
+For each question:
+- Write the question clearly (may have sub-parts a, b)
+- Provide a comprehensive model answer (approximately 400-500 words per answer)
+- Include algorithms, code examples, diagrams described in text where appropriate
 
-        for row in old_rows:
+Cover all modules/units of the syllabus evenly. Include a mix of:
+- Long answer theory questions
+- Algorithm/code writing questions
+- Case study or scenario-based questions
+- Proof/derivation questions (if applicable)
 
-            user_id = row["user_id"]
-            plaintext_key = row["api_key"] or ""
-            model = row["model"]
-            updated_at = row["updated_at"]
+Format each as:
+### Q1. [Question text] (10 Marks)
+**Answer:** [Detailed model answer]
 
-            if plaintext_key:
+Make it realistic and exam-focused for MCA students.""",
 
-                # Encrypt the existing personal API key.
-                encrypted_key = encrypt_api_key(
-                    plaintext_key
-                )
+    "viva": """You are an expert MCA professor. Generate a comprehensive set of viva voce questions for the subject "{name}" (Code: {code}, Semester {semester}).
 
-                # Store only the last 4 characters for display.
-                last4 = key_last4(
-                    plaintext_key
-                )
+Generate 25 viva questions organized by difficulty in Markdown format.
 
-                enabled = 1
+## Basic Level Questions (10 questions)
+Simple definition and concept questions with one-line answers.
 
-            else:
+## Intermediate Level Questions (10 questions)  
+Questions requiring explanation and understanding with 2-3 line answers.
 
-                encrypted_key = None
-                last4 = ""
-                enabled = 0
+## Advanced Level Questions (5 questions)
+Deep conceptual questions that test thorough understanding with detailed answers.
 
-            cursor.execute("""
-            INSERT INTO user_api_config_new
-            (
-                user_id,
-                encrypted_api_key,
-                api_key_last4,
-                api_key_enabled,
-                model,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                user_id,
-                encrypted_key,
-                last4,
-                enabled,
-                model,
-                updated_at
-            ))
+For each question provide:
+### Q: [Question]
+**A:** [Clear, concise answer]
 
-        # ----------------------------------------------------
-        # Replace old table with new table
-        # ----------------------------------------------------
+Also include:
+## Tips for Viva Preparation
+5 practical tips for performing well in the viva.
 
-        cursor.execute("""
-            DROP TABLE user_api_config
-        """)
+Make it realistic and helpful for MCA students preparing for lab viva or external exams."""
+}
 
-        cursor.execute("""
-            ALTER TABLE user_api_config_new
-            RENAME TO user_api_config
-        """)
+@subjects_bp.route('/api/subjects', methods=['GET'])
+def get_subjects_api():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    subjects = get_subjects()
+    return jsonify({"subjects": subjects})
 
-        return
+@subjects_bp.route('/subject/<string:code>', methods=['GET'])
+def subject_page(code):
+    if 'user_id' not in session:
+        return redirect(url_for('auth.login'))
+    
+    subject = get_subject_by_code(code)
+    if not subject:
+        return "Subject not found", 404
+        
+    return render_template('subject.html', subject=subject)
 
-    # --------------------------------------------------------
-    # Unexpected database schema
-    # --------------------------------------------------------
+@subjects_bp.route('/api/generate_notes', methods=['POST'])
+def generate_notes():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
 
-    raise RuntimeError(
-        "Unsupported user_api_config database schema. "
-        "Expected either 'api_key' or 'encrypted_api_key'."
-    )
+    user_id = session['user_id']
+    if not user_rate_limiter.allow_window(f"notes:{user_id}", 10, 60):
+        return jsonify({"error": "Rate limit exceeded. Please wait a moment before generating more study notes."}), 429
 
+    data = request.json or {}
+    subject_code = str(data.get("subject_code") or "").strip()
+    note_type = str(data.get("note_type") or "").strip()
 
-# ============================================================
-# DATABASE INITIALIZATION
-# ============================================================
+    if not subject_code or not note_type:
+        return jsonify({"error": "Missing subject_code or note_type"}), 400
 
-def init_db():
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # --------------------------------------------------------
-    # 1. Users Table
-    # --------------------------------------------------------
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    # --------------------------------------------------------
-    # 2. Sessions Table
-    # --------------------------------------------------------
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        user_id TEXT,
-        title TEXT NOT NULL,
-        is_pinned BOOLEAN DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id)
-            REFERENCES users(id)
-            ON DELETE CASCADE
-    )
-    """)
-
-    # --------------------------------------------------------
-    # 3. Messages Table
-    # --------------------------------------------------------
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        sender TEXT NOT NULL,
-        content TEXT NOT NULL,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (session_id)
-            REFERENCES sessions(id)
-            ON DELETE CASCADE
-    )
-    """)
-
-    # --------------------------------------------------------
-    # 4. Subjects Table
-    # --------------------------------------------------------
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS subjects (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        semester INTEGER NOT NULL,
-        description TEXT,
-        syllabus TEXT
-    )
-    """)
-
-    # --------------------------------------------------------
-    # 5. User Progress
-    # --------------------------------------------------------
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS user_progress (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        subject_code TEXT NOT NULL,
-        progress_percentage INTEGER DEFAULT 0,
-        last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id)
-            REFERENCES users(id)
-            ON DELETE CASCADE
-    )
-    """)
-
-    # --------------------------------------------------------
-    # 6. Generated Notes / Questions Cache
-    # --------------------------------------------------------
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS generated_notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        subject_code TEXT NOT NULL,
-        note_type TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    # --------------------------------------------------------
-    # 7. User API Configuration
-    #
-    # Create the new schema or migrate the old schema.
-    # --------------------------------------------------------
-
-    migrate_user_api_config(conn)
-
-    # --------------------------------------------------------
-    # Backward compatibility for Sessions table
-    # --------------------------------------------------------
-
+    if note_type not in PROMPT_TEMPLATES:
+        return jsonify({"error": f"Invalid note type requested: {note_type[:30]}"}), 400
+    
+    subject = get_subject_by_code(subject_code)
+    if not subject:
+        return jsonify({"error": "Subject not found"}), 404
+        
+    # Check cache first
+    cached_note = get_generated_note(subject_code, note_type)
+    if cached_note:
+        return jsonify({"content": cached_note})
+        
+    # Resolve the authenticated user's personal key first, then the
+    # server default key. Neither key is exposed to the browser.
     try:
-        cursor.execute("""
-            ALTER TABLE sessions
-            ADD COLUMN user_id TEXT
-            REFERENCES users(id)
-            ON DELETE CASCADE
-        """)
-    except sqlite3.OperationalError:
-        # Column already exists.
-        pass
-
-    try:
-        cursor.execute("""
-            ALTER TABLE sessions
-            ADD COLUMN is_pinned BOOLEAN DEFAULT 0
-        """)
-    except sqlite3.OperationalError:
-        # Column already exists.
-        pass
-
-    # --------------------------------------------------------
-    # Indexes
-    # --------------------------------------------------------
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS
-        idx_sessions_user_id
-        ON sessions(user_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS
-        idx_messages_session_id
-        ON messages(session_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS
-        idx_progress_user
-        ON user_progress(user_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS
-        idx_notes_subject
-        ON generated_notes(subject_code, note_type)
-    """)
-
-    # Commit database structure changes.
-    conn.commit()
-
-    # --------------------------------------------------------
-    # Seed Subjects
-    #
-    # Only seed if there are no subjects.
-    #
-    # IMPORTANT:
-    # We do NOT delete existing subjects every time the
-    # application starts.
-    # --------------------------------------------------------
-
-    subject_count = cursor.execute("""
-        SELECT COUNT(*) AS count
-        FROM subjects
-    """).fetchone()["count"]
-
-    if subject_count == 0:
-        seed_subjects(conn)
-
-    conn.close()
-
-
-# ============================================================
-# SEED MCA SUBJECTS
-# ============================================================
-
-def seed_subjects(conn):
-
-    subjects_data = [
-
-        # ====================================================
-        # SEMESTER 1
-        # ====================================================
-
-        {
-            "code": "MCA-101",
-            "name": "Programming in C",
-            "semester": 1,
-            "description":
-                "Foundational programming concepts using the C language.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Data Types",
-                        "Control Structures",
-                        "Functions",
-                        "Pointers",
-                        "File I/O"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-102",
-            "name": "Mathematics",
-            "semester": 1,
-            "description":
-                "Discrete math and foundations for computing.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Set Theory",
-                        "Graph Theory",
-                        "Logic",
-                        "Combinatorics"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-103",
-            "name": "Digital Computer Organization",
-            "semester": 1,
-            "description":
-                "Hardware organization, logic gates, and architecture.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Logic Gates",
-                        "K-Maps",
-                        "Registers",
-                        "Memory Hierarchy"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-104",
-            "name": "Database Concepts",
-            "semester": 1,
-            "description":
-                "Fundamentals of databases and ER modeling.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "DBMS Architecture",
-                        "ER Models",
-                        "Relational Algebra",
-                        "SQL Basics"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-105",
-            "name": "Communication Skills",
-            "semester": 1,
-            "description":
-                "Professional communication and soft skills.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Verbal Communication",
-                        "Writing Skills",
-                        "Presentations"
-                    ]
-                }
-            ]
-        },
-
-        # ====================================================
-        # SEMESTER 2
-        # ====================================================
-
-        {
-            "code": "MCA-201",
-            "name": "Data Structures",
-            "semester": 2,
-            "description":
-                "Design and analysis of basic data structures.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Arrays",
-                        "Linked Lists",
-                        "Stacks & Queues",
-                        "Trees",
-                        "Graphs"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-202",
-            "name": "Java Programming",
-            "semester": 2,
-            "description":
-                "Object-oriented programming using Java.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "OOP Concepts",
-                        "Inheritance",
-                        "Multithreading",
-                        "Exception Handling"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-203",
-            "name": "Operating Systems",
-            "semester": 2,
-            "description":
-                "Core operating system concepts and process management.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Process Management",
-                        "Deadlocks",
-                        "Memory Management",
-                        "File Systems"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-204",
-            "name": "DBMS",
-            "semester": 2,
-            "description":
-                "Advanced database management, normalization, and transactions.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Normalization",
-                        "Transactions",
-                        "Concurrency Control",
-                        "SQL Tuning"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-205",
-            "name": "Computer Networks",
-            "semester": 2,
-            "description":
-                "Networking models, layers, and protocols.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "OSI Model",
-                        "TCP/IP",
-                        "Routing",
-                        "Application Layer"
-                    ]
-                }
-            ]
-        },
-
-        # ====================================================
-        # SEMESTER 3
-        # ====================================================
-
-        {
-            "code": "MCA-301",
-            "name": "Python Programming",
-            "semester": 3,
-            "description":
-                "Advanced Python for software and web development.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Python Basics",
-                        "OOP in Python",
-                        "Data Science libraries",
-                        "Web APIs"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-302",
-            "name": "Software Engineering",
-            "semester": 3,
-            "description":
-                "Software development life cycles and methodologies.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "SDLC",
-                        "Agile",
-                        "UML",
-                        "Testing & Maintenance"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-303",
-            "name": "Machine Learning",
-            "semester": 3,
-            "description":
-                "Fundamentals of supervised and unsupervised learning.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Regression",
-                        "Classification",
-                        "Clustering",
-                        "Neural Networks"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-304",
-            "name": "Artificial Intelligence",
-            "semester": 3,
-            "description":
-                "AI search algorithms and knowledge representation.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Search Algorithms",
-                        "Logic",
-                        "Expert Systems",
-                        "NLP basics"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-305",
-            "name": "Cloud Computing",
-            "semester": 3,
-            "description":
-                "Cloud architecture, virtualization, and services.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "IaaS, PaaS, SaaS",
-                        "AWS Basics",
-                        "Docker",
-                        "Kubernetes"
-                    ]
-                }
-            ]
-        },
-
-        # ====================================================
-        # SEMESTER 4
-        # ====================================================
-
-        {
-            "code": "MCA-401",
-            "name": "Major Project",
-            "semester": 4,
-            "description":
-                "Final semester major implementation project.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Project Planning",
-                        "Implementation",
-                        "Testing",
-                        "Deployment"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-402",
-            "name": "Internship",
-            "semester": 4,
-            "description":
-                "Industry experience and internship.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Industry Experience"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-403",
-            "name": "Seminar",
-            "semester": 4,
-            "description":
-                "Technical seminar on recent trends.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Research",
-                        "Presentation"
-                    ]
-                }
-            ]
-        },
-
-        {
-            "code": "MCA-404",
-            "name": "Electives",
-            "semester": 4,
-            "description":
-                "Advanced elective subjects.",
-            "syllabus": [
-                {
-                    "unit": "Overview",
-                    "topics": [
-                        "Elective Topics"
-                    ]
-                }
-            ]
-        }
-    ]
-
-    cursor = conn.cursor()
-
-    for subject in subjects_data:
-
-        cursor.execute("""
-        INSERT OR REPLACE INTO subjects
-        (
-            code,
-            name,
-            semester,
-            description,
-            syllabus
-        )
-        VALUES (?, ?, ?, ?, ?)
-        """, (
-            subject["code"],
-            subject["name"],
-            subject["semester"],
-            subject["description"],
-            json.dumps(subject["syllabus"])
-        ))
-
-    conn.commit()
-
-
-# ============================================================
-# USERS
-# ============================================================
-
-def create_user(user_id, username, password_hash):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO users
-        (
-            id,
-            username,
-            password_hash
-        )
-        VALUES (?, ?, ?)
-    """, (
-        user_id,
-        username,
-        password_hash
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-def get_user_by_username(username):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT *
-        FROM users
-        WHERE username = ?
-    """, (username,))
-
-    row = cursor.fetchone()
-
-    conn.close()
-
-    return dict(row) if row else None
-
-
-# ============================================================
-# SESSIONS
-# ============================================================
-
-def create_session(session_id, user_id, title):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO sessions
-        (
-            id,
-            user_id,
-            title
-        )
-        VALUES (?, ?, ?)
-    """, (
-        session_id,
-        user_id,
-        title
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-def get_sessions(user_id):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT *
-        FROM sessions
-        WHERE user_id = ?
-        ORDER BY is_pinned DESC, created_at DESC
-    """, (user_id,))
-
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    return [dict(row) for row in rows]
-
-
-def delete_session(session_id, user_id):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        DELETE FROM sessions
-        WHERE id = ?
-        AND user_id = ?
-    """, (
-        session_id,
-        user_id
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-def rename_session(session_id, user_id, new_title):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        UPDATE sessions
-        SET title = ?
-        WHERE id = ?
-        AND user_id = ?
-    """, (
-        new_title,
-        session_id,
-        user_id
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-def toggle_pin_session(session_id, user_id, is_pinned):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        UPDATE sessions
-        SET is_pinned = ?
-        WHERE id = ?
-        AND user_id = ?
-    """, (
-        1 if is_pinned else 0,
-        session_id,
-        user_id
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-# ============================================================
-# MESSAGES
-# ============================================================
-
-def save_message(session_id, sender, content):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO messages
-        (
-            session_id,
-            sender,
-            content
-        )
-        VALUES (?, ?, ?)
-    """, (
-        session_id,
-        sender,
-        content
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-def get_session_messages(session_id):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT
-            id,
-            sender,
-            content,
-            timestamp
-        FROM messages
-        WHERE session_id = ?
-        ORDER BY id ASC
-    """, (session_id,))
-
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    return [dict(row) for row in rows]
-
-
-def delete_message(message_id):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        DELETE FROM messages
-        WHERE id = ?
-    """, (message_id,))
-
-    conn.commit()
-    conn.close()
-
-
-# ============================================================
-# SUBJECTS
-# ============================================================
-
-def get_subjects():
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT *
-        FROM subjects
-        ORDER BY semester ASC, code ASC
-    """)
-
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    subjects = []
-
-    for row in rows:
-
-        subject = dict(row)
-
-        if subject.get("syllabus"):
-            subject["syllabus"] = json.loads(
-                subject["syllabus"]
-            )
-        else:
-            subject["syllabus"] = []
-
-        subjects.append(subject)
-
-    return subjects
-
-
-def get_subject_by_code(code):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT *
-        FROM subjects
-        WHERE code = ?
-    """, (code,))
-
-    row = cursor.fetchone()
-
-    conn.close()
-
-    if row:
-
-        subject = dict(row)
-
-        if subject.get("syllabus"):
-            subject["syllabus"] = json.loads(
-                subject["syllabus"]
-            )
-        else:
-            subject["syllabus"] = []
-
-        return subject
-
-    return None
-
-
-# ============================================================
-# GENERATED NOTES / QUESTIONS CACHE
-# ============================================================
-
-def get_generated_note(subject_code, note_type):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT content
-        FROM generated_notes
-        WHERE subject_code = ?
-        AND note_type = ?
-    """, (
-        subject_code,
-        note_type
-    ))
-
-    row = cursor.fetchone()
-
-    conn.close()
-
-    return row["content"] if row else None
-
-
-def save_generated_note(subject_code, note_type, content):
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO generated_notes
-        (
-            subject_code,
-            note_type,
-            content
-        )
-        VALUES (?, ?, ?)
-    """, (
-        subject_code,
-        note_type,
-        content
-    ))
-
-    conn.commit()
-    conn.close()
+        api_config = get_user_ai_config(session['user_id'])
+    except RuntimeError:
+        return jsonify({"error": "Stored personal API key could not be loaded. Please remove it and add it again."}), 500
+
+    api_key = api_config.get("api_key") or get_server_api_key()
+    model = api_config.get("model") or get_default_model()
+
+    if not api_key:
+        return jsonify({"error": "AI service is not configured on the server."}), 503
+
+    if not validate_model(model, api_key):
+        return jsonify({"error": "This model is currently unavailable. Please select another model in Settings."}), 400
+
+    # Build rich prompt from template
+    prompt_template = PROMPT_TEMPLATES.get(note_type)
+    if not prompt_template:
+        return jsonify({"error": f"Unknown note type: {note_type}"}), 400
+        
+    prompt = prompt_template.format(
+        name=subject['name'],
+        code=subject['code'],
+        semester=subject['semester']
+    )
+    
+    content, err_msg = generate_text_sync(prompt, model, api_key)
+    if err_msg or not content:
+        return jsonify({"error": err_msg or "Failed to generate content. Please check your API key and model in Settings."}), 500
+        
+    # Cache the result for future use
+    save_generated_note(subject_code, note_type, content)
+    return jsonify({"content": content})
