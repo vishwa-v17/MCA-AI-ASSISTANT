@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{{ subject.name }} - MCA Assistant</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -114,6 +115,7 @@
     </main>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
@@ -164,9 +166,13 @@
         section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
         try {
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
             const res = await fetch('/api/generate_notes', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
                 body: JSON.stringify({ subject_code: subjectCode, note_type: type })
             });
             
@@ -185,7 +191,8 @@
                 `;
             } else {
                 currentGeneratedText = data.content;
-                body.innerHTML = marked.parse(data.content);
+                const parsedHtml = marked.parse(data.content);
+                body.innerHTML = window.DOMPurify ? DOMPurify.sanitize(parsedHtml) : parsedHtml;
                 if (window.Prism) {
                     Prism.highlightAllUnder(body);
                 }
